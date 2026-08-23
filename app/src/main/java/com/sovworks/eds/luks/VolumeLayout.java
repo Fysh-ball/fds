@@ -502,55 +502,81 @@ public class VolumeLayout extends VolumeLayoutBase
 		return mki;
 	}
 	
+	/**
+	 * Three buffers in here hold key material and only one of them was ever erased.
+	 *
+	 * afKey holds the anti-forensic split of the MASTER key once decrypted, so it is as
+	 * sensitive as the master key itself; key is the slot key the passphrase derives to.
+	 * Neither was zeroed on any path, and mk was zeroed only on the clean "wrong slot"
+	 * return, not when AF.merge threw. A LUKS open walks up to eight key slots and every
+	 * one of them left an afKey and a slot key behind, so the leak scaled with the number
+	 * of slots and with every failed unlock attempt.
+	 *
+	 * mk is the exception that has to be handled by hand: on success it BECOMES _masterKey
+	 * and must survive, and VolumeLayoutBase.close() is what erases it from then on.
+	 */
 	protected boolean tryPassword(RandomAccessIO io, KeySlot ks, MKInfo mki, byte[] password) throws IOException, ApplicationException
 	{
 		io.seek(ks.keyMaterialOffsetSector * SECTOR_SIZE);
 		AF af = new AF(_hashFunc, mki.keyLength);
 		int afSize = af.calcNumRequiredSectors(ks.numStripes) * SECTOR_SIZE;
 		byte[] afKey = new byte[afSize];
-		if(Util.readBytes(io,afKey,afKey.length) != afKey.length)
-			throw new EOFException();
-
-		if(_openingProgressReporter!=null)
-		{
-			_openingProgressReporter.setCurrentKDFName(_hashFunc.getAlgorithm());
-			_openingProgressReporter.setCurrentEncryptionAlgName(VolumeLayoutBase.getEncEngineName(_encEngine));
-			((ProgressReporter)_openingProgressReporter).setKSProcessed(false);
-		}
-		
-		Logger.debug(String.format("Using %s hash function to derive the key", _hashFunc.getAlgorithm()));
-		byte[] key = deriveKey(_encEngine.getKeySize(), _hashFunc, password, ks.salt, ks.passwordIterations);
-		
-		Logger.debug(String.format("Using %s encryption engine", VolumeLayoutBase.getEncEngineName(_encEngine)));
-		_encEngine.setKey(key);
-		_encEngine.init();
-		//_encEngine.setIV(ks.keyMaterialOffsetSector);
-		_encEngine.setIV(new byte[_encEngine.getIVSize()]);
-		_encEngine.decrypt(afKey, 0, afKey.length);
-		
-		
-		byte[] mk = new byte[mki.keyLength];
+		byte[] key = null;
+		byte[] mk = null;
+		boolean adopted = false;
 		try
 		{
-			af.merge(afKey, 0, mk, 0, ks.numStripes);
-		}
-		catch (DigestException e)
-		{
-			throw new ApplicationException("AF merge failed", e);
-		}
-		if(_openingProgressReporter!=null)
-			((ProgressReporter)_openingProgressReporter).setKSProcessed(true);
-		if(mki.isValidKey(mk))
-		{
-			_masterKey = mk;
-			_encEngine.setKey(_masterKey);			
-			_encEngine.init();
-			return true;
-		}
-		Arrays.fill(mk, (byte)0);
-		return false;
+			if(Util.readBytes(io,afKey,afKey.length) != afKey.length)
+				throw new EOFException();
 
+			if(_openingProgressReporter!=null)
+			{
+				_openingProgressReporter.setCurrentKDFName(_hashFunc.getAlgorithm());
+				_openingProgressReporter.setCurrentEncryptionAlgName(VolumeLayoutBase.getEncEngineName(_encEngine));
+				((ProgressReporter)_openingProgressReporter).setKSProcessed(false);
+			}
+
+			Logger.debug(String.format("Using %s hash function to derive the key", _hashFunc.getAlgorithm()));
+			key = deriveKey(_encEngine.getKeySize(), _hashFunc, password, ks.salt, ks.passwordIterations);
+
+			Logger.debug(String.format("Using %s encryption engine", VolumeLayoutBase.getEncEngineName(_encEngine)));
+			_encEngine.setKey(key);
+			_encEngine.init();
+			//_encEngine.setIV(ks.keyMaterialOffsetSector);
+			_encEngine.setIV(new byte[_encEngine.getIVSize()]);
+			_encEngine.decrypt(afKey, 0, afKey.length);
+
+			mk = new byte[mki.keyLength];
+			try
+			{
+				af.merge(afKey, 0, mk, 0, ks.numStripes);
+			}
+			catch (DigestException e)
+			{
+				throw new ApplicationException("AF merge failed", e);
+			}
+			if(_openingProgressReporter!=null)
+				((ProgressReporter)_openingProgressReporter).setKSProcessed(true);
+			if(mki.isValidKey(mk))
+			{
+				_masterKey = mk;
+				adopted = true;
+				_encEngine.setKey(_masterKey);
+				_encEngine.init();
+				return true;
+			}
+			return false;
+		}
+		finally
+		{
+			Arrays.fill(afKey, (byte)0);
+			if(key != null)
+				Arrays.fill(key, (byte)0);
+			if(mk != null && !adopted)
+				Arrays.fill(mk, (byte)0);
+		}
 	}
+
 
 	protected byte[] getCipherName()
 	{

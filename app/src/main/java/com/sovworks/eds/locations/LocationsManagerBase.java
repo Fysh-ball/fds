@@ -264,19 +264,35 @@ public abstract class LocationsManagerBase
 	{
 		if(_mediaChangedReceiver != null)
 			return;
-		_mediaChangedReceiver = new MediaMountedReceiver(this);
-		_context.registerReceiver(_mediaChangedReceiver, new IntentFilter(Intent.ACTION_MEDIA_MOUNTED));
-		_context.registerReceiver(_mediaChangedReceiver, new IntentFilter(Intent.ACTION_MEDIA_UNMOUNTED));
-		_context.registerReceiver(_mediaChangedReceiver, new IntentFilter(Intent.ACTION_MEDIA_REMOVED));
-		_context.registerReceiver(_mediaChangedReceiver, new IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED));
-		_context.registerReceiver(_mediaChangedReceiver, new IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED));
+		// Registered against a local and published to the field only once the first
+		// register has returned. Setting the field first makes "non-null but never
+		// registered" reachable, and close() then throws on the unregister before it can
+		// close a single container.
+		MediaMountedReceiver r = new MediaMountedReceiver(this);
+		_context.registerReceiver(r, new IntentFilter(Intent.ACTION_MEDIA_MOUNTED));
+		_mediaChangedReceiver = r;
+		_context.registerReceiver(r, new IntentFilter(Intent.ACTION_MEDIA_UNMOUNTED));
+		_context.registerReceiver(r, new IntentFilter(Intent.ACTION_MEDIA_REMOVED));
+		_context.registerReceiver(r, new IntentFilter(UsbManager.ACTION_USB_DEVICE_ATTACHED));
+		_context.registerReceiver(r, new IntentFilter(UsbManager.ACTION_USB_DEVICE_DETACHED));
 	}
 
 	public void close()
 	{
+		// Best effort, and never a reason to skip what follows. unregisterReceiver throws
+		// IllegalArgumentException for a receiver it does not know, and closing the
+		// containers is the whole point of this method: it must not be downstream of a
+		// call that can fail.
 		if(_mediaChangedReceiver!=null)
 		{
-			_context.unregisterReceiver(_mediaChangedReceiver);
+			try
+			{
+				_context.unregisterReceiver(_mediaChangedReceiver);
+			}
+			catch(Throwable e)
+			{
+				Logger.log(e);
+			}
 			_mediaChangedReceiver = null;
 		}
 		closeAllLocations(true, false);

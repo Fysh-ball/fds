@@ -43,6 +43,8 @@ public abstract class UserSettingsCommon implements SettingsCommon
 	public static final String DISABLE_MODIFIED_FILES_BACKUP = "disable_modified_files_backup";
 	public static final String IS_FLAG_SECURE_ENABLED = "is_flag_secure_enabled";
 	public static final String FORCE_UNMOUNT = "force_unmount";
+	public static final String LOCK_ON_SCREEN_OFF = "lock_on_screen_off";
+	public static final String LOCK_ON_TASK_REMOVED = "lock_on_task_removed";
 	public static final String CURRENT_SETTINGS_VERSION = "current_settings_version";
 	public static final String SETTINGS_PROTECTION_KEY_OLD = "settings_protection_key";
 	public static final String SETTINGS_PROTECTION_KEY_USER = "settings_protection_key_user";
@@ -261,6 +263,18 @@ public abstract class UserSettingsCommon implements SettingsCommon
 	public boolean alwaysForceClose()
 	{
 		return _prefs.getBoolean(FORCE_UNMOUNT, _defaultSettings.alwaysForceClose());
+	}
+
+	@Override
+	public boolean lockOnScreenOff()
+	{
+		return _prefs.getBoolean(LOCK_ON_SCREEN_OFF, _defaultSettings.lockOnScreenOff());
+	}
+
+	@Override
+	public boolean lockOnTaskRemoved()
+	{
+		return _prefs.getBoolean(LOCK_ON_TASK_REMOVED, _defaultSettings.lockOnTaskRemoved());
 	}
 
 	@Override

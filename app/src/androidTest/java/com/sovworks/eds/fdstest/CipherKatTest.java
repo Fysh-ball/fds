@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 
@@ -119,6 +120,83 @@ public class CipherKatTest
             md.reset();
             byte[] afterReset = md.digest("abc".getBytes("UTF-8"));
             assertArrayEquals(md.getAlgorithm() + " did not reset", first, afterReset);
+        }
+    }
+
+    /**
+     * digest(byte[], int, int) must agree with digest(), in every shape.
+     *
+     * RIPEMD160 and Whirlpool override that three-argument form to write straight into the
+     * caller's array, because MessageDigestSpi's default allocates one per call and PBKDF2
+     * calls it twice per iteration: 1.3 million throwaway arrays for a single ripemd160
+     * unlock attempt at VeraCrypt's 655331 iterations. HMAC.calcHMAC is the only caller and
+     * it always passes the exact-fit shape, so a defect in the override would show up as
+     * every container silently refusing to open rather than as an error.
+     *
+     * All three shapes are checked, not just the fast one. The override takes the fast path
+     * only for offset 0 into an exactly-sized array and delegates otherwise, so a bug in the
+     * CONDITION rather than in the write would send a caller down the wrong branch, and only
+     * comparing the branches against each other can see that.
+     */
+    @Test
+    public void digestIntoACallerBufferAgreesWithTheAllocatingForm() throws Exception
+    {
+        for (MessageDigest md : new MessageDigest[]{new RIPEMD160(), new Whirlpool()})
+        {
+            String alg = md.getAlgorithm();
+            int n = md.getDigestLength();
+            byte[] data = pattern(1000, 3);
+            byte[] reference = md.digest(data);
+            assertEquals(alg + " reports a digest length that does not match its output",
+                    n, reference.length);
+
+            // Exact fit: the path HMAC takes 1.3 million times per unlock.
+            byte[] exact = new byte[n];
+            md.update(data);
+            assertEquals(alg + " exact-fit digest returned the wrong length",
+                    n, md.digest(exact, 0, n));
+            assertArrayEquals(alg + " exact-fit digest disagrees with digest()",
+                    reference, exact);
+
+            // Offset into a larger array: must delegate, and must not touch its surroundings.
+            byte[] offsetBuf = new byte[n + 8];
+            Arrays.fill(offsetBuf, (byte) 0x5a);
+            md.update(data);
+            assertEquals(alg + " offset digest returned the wrong length",
+                    n, md.digest(offsetBuf, 4, n));
+            assertArrayEquals(alg + " offset digest disagrees with digest()",
+                    reference, Arrays.copyOfRange(offsetBuf, 4, 4 + n));
+            assertEquals(alg + " offset digest wrote before its offset",
+                    (byte) 0x5a, offsetBuf[3]);
+            assertEquals(alg + " offset digest wrote past its length",
+                    (byte) 0x5a, offsetBuf[4 + n]);
+
+            // Oversized array at offset 0: also the delegating branch.
+            byte[] big = new byte[n * 2];
+            md.update(data);
+            assertEquals(alg + " oversized digest returned the wrong length",
+                    n, md.digest(big, 0, n));
+            assertArrayEquals(alg + " oversized digest disagrees with digest()",
+                    reference, Arrays.copyOf(big, n));
+
+            // Too short: must refuse rather than write a truncated digest the caller would
+            // then use as a key.
+            md.update(data);
+            try
+            {
+                md.digest(new byte[n - 1], 0, n - 1);
+                fail(alg + " produced a digest into a buffer too small to hold one");
+            }
+            catch (java.security.DigestException expected)
+            {
+                // correct
+            }
+            md.reset();
+
+            // And the digest still works afterwards, so none of the above left the native
+            // context half-finished.
+            assertArrayEquals(alg + " stopped agreeing with itself after the shapes above",
+                    reference, md.digest(data));
         }
     }
 

@@ -10,17 +10,20 @@ import javax.crypto.spec.SecretKeySpec;
 import com.sovworks.eds.crypto.EncryptionEngineException;
 
 /**
- * HMAC computed by the platform provider in one call instead of by six MessageDigest calls.
+ * HMAC through javax.crypto.Mac. TEST-ONLY, and deliberately not on any production path.
  *
- * PBKDF2 is a tight loop around HMAC, and at VeraCrypt's 500000 iterations the cost is not
- * the hashing. The generic {@link HMAC} rebuilds the ipad and opad blocks and crosses the
- * JCA boundary six times per iteration, so three million boundary crossings dominate a
- * single unlock. javax.crypto.Mac keeps the key schedule and does the whole HMAC natively.
+ * It shipped briefly as an optimisation on the PBKDF2 loop, on the reasoning that one native
+ * call per iteration must beat the generic {@link HMAC}'s six MessageDigest calls. Measured,
+ * both halves of that were false: Conscrypt allocates a fresh native HMAC_CTX inside every
+ * doFinal() and nothing collects it (the Java wrapper is too small to provoke a GC), so a
+ * 200000-iteration loop grows the process by 109 to 140 MB, and it is also about 23% SLOWER
+ * than the path it was meant to replace. At VeraCrypt's 500000 iterations across a four-hash
+ * sweep that reached 1.5 GB RSS and the app was killed by lmkd mid-unlock.
  *
- * This is an optimisation only where the platform actually has a native HMAC for the digest:
- * {@link #macNameFor} returns null for the two hashes this app carries its own JNI code for
- * (ripemd160, whirlpool), and those keep the generic path. Both paths must produce identical
- * bytes, which is what KdfEquivalenceTest asserts rather than assumes.
+ * It is kept, out of the shipped APK, as the positive control in HmacNativeMemoryTest: that
+ * test asserts the production path does not grow the native heap, and an assertion like that
+ * is worthless without something in the same run that does grow it. It is also still the
+ * byte-for-byte oracle KdfTest compares the generic HMAC against.
  */
 public class MacHMAC extends HMAC
 {

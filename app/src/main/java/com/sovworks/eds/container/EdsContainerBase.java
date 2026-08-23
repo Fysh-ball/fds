@@ -89,6 +89,7 @@ public abstract class EdsContainerBase implements Closeable
 	public synchronized void open(byte[] password) throws IOException, ApplicationException
 	{
 		Logger.debug("Opening container at " + _pathToContainer.getPathString());
+		_isHiddenVolumeOpened = false;
 		RandomAccessIO t = openFile();
 		try
 		{
@@ -137,25 +138,68 @@ public abstract class EdsContainerBase implements Closeable
 		return _fileSystem;
 	}
 		
+	/**
+	 * Closing the layout is what ZEROES the master key and the password, and it used to be
+	 * the last of three unguarded statements: an IOException from the filesystem or from the
+	 * container file skipped it and left the key resident for the life of the process. The
+	 * key material is released first for that reason, and every step now runs even when an
+	 * earlier one throws. The first exception is the one reported; a later one is attached
+	 * to it rather than replacing it, so a failure to flush is never hidden by a failure to
+	 * close.
+	 */
 	public synchronized void close() throws IOException
 	{
-		if(_fileSystem!=null)
+		IOException first = null;
+		try
 		{
-			_fileSystem.close(true);
+			if(_fileSystem!=null)
+				_fileSystem.close(true);
+		}
+		catch(IOException e)
+		{
+			first = e;
+		}
+		finally
+		{
 			_fileSystem = null;
 		}
 
-		if(_encryptedFile!=null)
+		try
 		{
-			_encryptedFile.close();
+			if(_encryptedFile!=null)
+				_encryptedFile.close();
+		}
+		catch(IOException e)
+		{
+			if(first == null)
+				first = e;
+			else
+				first.addSuppressed(e);
+		}
+		finally
+		{
 			_encryptedFile = null;
 		}
-		
-		if(_layout!=null)		
+
+		try
 		{
-			_layout.close();
+			if(_layout!=null)
+				_layout.close();
+		}
+		catch(IOException e)
+		{
+			if(first == null)
+				first = e;
+			else
+				first.addSuppressed(e);
+		}
+		finally
+		{
 			_layout = null;
 		}
+
+		if(first != null)
+			throw first;
 	}
 	
 	public Path getPathToContainer()
@@ -168,6 +212,24 @@ public abstract class EdsContainerBase implements Closeable
 		return _layout;
 	}
 	
+	/**
+	 * Whether the volume that opened was the HIDDEN one.
+	 *
+	 * Exists so that callers which cache "this container is VeraCrypt with whirlpool" to skip
+	 * the search next time can refuse to cache it for a hidden open. Caching it there would
+	 * write down a fact that contradicts the outer volume: someone who is handed the outer
+	 * passphrase under duress can mount the outer volume, read its real hash out of its own
+	 * header, compare it with the cached hint, and learn that a hidden volume exists. That is
+	 * the one thing the feature is for, so the flag is part of the open contract and not an
+	 * afterthought in the caller.
+	 *
+	 * Meaningful only after a successful open; reset at the start of each one.
+	 */
+	public boolean isHiddenVolumeOpened()
+	{
+		return _isHiddenVolumeOpened;
+	}
+
 	public ContainerFormatInfo getContainerFormat()
 	{
 		return _containerFormat;
@@ -215,6 +277,7 @@ public abstract class EdsContainerBase implements Closeable
 	protected FileEncryptionEngine _encryptionEngine;
 
 	protected MessageDigest _messageDigest;
+	private boolean _isHiddenVolumeOpened;
 
 	protected abstract List<ContainerFormatInfo> getFormats();
 
@@ -253,6 +316,7 @@ public abstract class EdsContainerBase implements Closeable
 		if(isHidden && !cf.hasHiddenContainerSupport())
 			return false;
 		Logger.debug(String.format("Trying %s container format%s", cf.getFormatName(), isHidden ? " (hidden)" : ""));
+		_isHiddenVolumeOpened = isHidden;
 		if(_progressReporter!=null)
 		{
 			_progressReporter.setContainerFormatName(cf.getFormatName());
@@ -265,28 +329,43 @@ public abstract class EdsContainerBase implements Closeable
 		if(_messageDigest!=null)
 			vl.setHashFunc(_messageDigest);
 		
-		vl.setPassword(cutPassword(password, cf.getMaxPasswordLength()));
-		if(cf.hasCustomKDFIterationsSupport() && _numKDFIterations > 0)
-			vl.setNumKDFIterations(_numKDFIterations);
-		if(vl.readHeader(containerFile))
-		{			
-			_containerFormat = cf;
-			_layout = vl;			
-			return true;
-		}
-		else if(isHidden && (_encryptionEngine!=null || _messageDigest!=null))
+		// From here on the layout holds a copy of the passphrase, so the only exit that may
+		// skip vl.close() is the one that hands the layout to _layout. readHeader THROWS on
+		// a wrong password for LUKS (luks/VolumeLayout rejects every wrong password with
+		// WrongPasswordException rather than returning false), so an unguarded throw here
+		// left one passphrase copy resident per format tried, per attempt.
+		boolean adopted = false;
+		try
 		{
-			vl.setEngine(null);
-			vl.setHashFunc(null);
+			vl.setPassword(cutPassword(password, cf.getMaxPasswordLength()));
+			if(cf.hasCustomKDFIterationsSupport() && _numKDFIterations > 0)
+				vl.setNumKDFIterations(_numKDFIterations);
 			if(vl.readHeader(containerFile))
 			{
 				_containerFormat = cf;
 				_layout = vl;
+				adopted = true;
 				return true;
 			}
+			else if(isHidden && (_encryptionEngine!=null || _messageDigest!=null))
+			{
+				vl.setEngine(null);
+				vl.setHashFunc(null);
+				if(vl.readHeader(containerFile))
+				{
+					_containerFormat = cf;
+					_layout = vl;
+					adopted = true;
+					return true;
+				}
+			}
+			return false;
 		}
-		vl.close();		
-		return false;
+		finally
+		{
+			if(!adopted)
+				vl.close();
+		}
 	}
 	
 	protected Iterable<VolumeLayout> getLayouts(boolean isHidden)

@@ -194,6 +194,25 @@ public class DefaultSettingsCommon implements SettingsCommon
 		return false;
 	}
 
+	/**
+	 * Both default ON. The threat model this fork targets starts with a device that leaves
+	 * its owner's hands, and a container that stays mounted across a locked screen is
+	 * readable by whoever picks the phone up next. Upstream had no equivalent at all: the
+	 * only automatic close was a per-container inactivity timer that defaults to zero, so
+	 * out of the box nothing ever closed a container except the user.
+	 */
+	@Override
+	public boolean lockOnScreenOff()
+	{
+		return true;
+	}
+
+	@Override
+	public boolean lockOnTaskRemoved()
+	{
+		return true;
+	}
+
 	@Override
 	public int getCurrentTheme()
 	{

@@ -79,12 +79,17 @@ public class KdfTest
     }
 
     /**
-     * The Mac-backed HMAC exists only to be faster. If it ever differs from the generic one
-     * by a single byte it would silently produce a wrong master key, so the two are compared
-     * directly rather than trusted to agree because both are "HMAC".
+     * The generic HMAC is checked against the platform's own, byte for byte.
+     *
+     * MacHMAC is no longer on any production path: it leaked a native context per doFinal
+     * and was slower than what it replaced, and it now lives in the test sources for exactly
+     * two jobs. This is the second one. javax.crypto.Mac is an independent implementation of
+     * the same RFC, so it is a real oracle for the hand-rolled ipad/opad loop that derives
+     * every master key in this app; an HMAC that is wrong by one byte produces a wrong key
+     * and an unopenable container, with nothing anywhere reporting an error.
      */
     @Test
-    public void macHmacAgreesWithTheGenericHmac() throws Exception
+    public void theGenericHmacAgreesWithThePlatformMac() throws Exception
     {
         byte[] key = "fds-key-material-éü".getBytes(UTF8);
         byte[] data = new byte[257];
@@ -97,7 +102,8 @@ public class KdfTest
             MessageDigest md = MessageDigest.getInstance(pair[0]);
             int block = Integer.parseInt(pair[1]);
             String macName = MacHMAC.macNameFor(md);
-            assertNotNull("no Mac name for " + pair[0] + ", so the fast path is silently dead", macName);
+            assertNotNull("no platform Mac for " + pair[0] + ", so this comparison has no "
+                    + "oracle and proves nothing", macName);
 
             HMAC generic = new HMAC(key, MessageDigest.getInstance(pair[0]), block);
             MacHMAC fast = new MacHMAC(key, md, block, macName);
@@ -116,18 +122,6 @@ public class KdfTest
             compared++;
         }
         assertEquals("the comparison loop ran on nothing", 3, compared);
-    }
-
-    /**
-     * ripemd160 and whirlpool have no platform Mac. If a future platform starts offering one
-     * under those names this test turns red, which is the moment to check the vectors again
-     * rather than the moment to discover a silent behaviour change.
-     */
-    @Test
-    public void ownJniHashesStayOnTheGenericPath()
-    {
-        assertEquals("ripemd160 must not take the Mac path", null, MacHMAC.macNameFor(new RIPEMD160()));
-        assertEquals("whirlpool must not take the Mac path", null, MacHMAC.macNameFor(new Whirlpool()));
     }
 
     /**

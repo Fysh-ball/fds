@@ -392,6 +392,34 @@ public abstract class ProgramSettingsFragmentBase extends PropertiesFragmentBase
                 return _settings.alwaysForceClose();
             }
         }));
+        commonPropertiesIds.add(getPropertiesView().addProperty(new SwitchPropertyEditor(this, R.string.lock_on_screen_off, R.string.lock_on_screen_off_desc)
+        {
+            @Override
+            protected void saveValue(boolean value)
+            {
+                editSettings().putBoolean(UserSettings.LOCK_ON_SCREEN_OFF, value).commit();
+            }
+
+            @Override
+            protected boolean loadValue()
+            {
+                return _settings.lockOnScreenOff();
+            }
+        }));
+        commonPropertiesIds.add(getPropertiesView().addProperty(new SwitchPropertyEditor(this, R.string.lock_on_task_removed, R.string.lock_on_task_removed_desc)
+        {
+            @Override
+            protected void saveValue(boolean value)
+            {
+                editSettings().putBoolean(UserSettings.LOCK_ON_TASK_REMOVED, value).commit();
+            }
+
+            @Override
+            protected boolean loadValue()
+            {
+                return _settings.lockOnTaskRemoved();
+            }
+        }));
         commonPropertiesIds.add(getPropertiesView().addProperty(new SwitchPropertyEditor(this, R.string.dont_use_content_provider, R.string.dont_use_content_provider_desc)
         {
             @Override

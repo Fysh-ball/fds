@@ -19,7 +19,13 @@ FILTER="${1:-}"
 FIX="${FIX:-/home/user/work/fds-fixtures}"
 PKG="${PKG:-site.fysh.fds}"
 DEST="/sdcard/Android/data/$PKG/files/fixtures"
-REPO="$(cd "$(dirname "$0")/.." && pwd)"
+# Overridable so a copy of this script can be run from anywhere, which is how a long run is
+# started safely: bash re-reads a script from a byte OFFSET as it executes, so editing this
+# file while a run is in flight resumes the live process in the middle of a different line.
+# Not hypothetical: it produced "line 115: e: command not found" and exit 127 AFTER a suite
+# that had already passed, which reads afterwards as a failed run.
+#   cp tools/run-fixture-tests.sh /tmp/r.sh && REPO=$PWD bash /tmp/r.sh
+REPO="${REPO:-$(cd "$(dirname "$0")/.." && pwd)}"
 
 # Resolve adb from the SAME sdk gradle builds against. local.properties is authoritative
 # for this repo; ANDROID_HOME on this box points at a directory that does not exist, and

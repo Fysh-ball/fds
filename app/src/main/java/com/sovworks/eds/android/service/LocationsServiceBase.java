@@ -19,8 +19,11 @@ import com.sovworks.eds.android.R;
 import com.sovworks.eds.android.filemanager.activities.FileManagerActivity;
 import com.sovworks.eds.android.helpers.CompatHelper;
 import com.sovworks.eds.android.helpers.TempFilesMonitor;
+import com.sovworks.eds.android.helpers.WipeFilesTask;
 import com.sovworks.eds.android.locations.activities.CloseLocationsActivity;
 import com.sovworks.eds.android.settings.UserSettings;
+import com.sovworks.eds.fs.util.SrcDstRec;
+import com.sovworks.eds.fs.util.SrcDstSingle;
 import com.sovworks.eds.fs.util.Util;
 import com.sovworks.eds.locations.EDSLocation;
 import com.sovworks.eds.locations.Location;
@@ -111,10 +114,25 @@ public class LocationsServiceBase extends Service
 		LocationsService.setCheckTimer(context, pi, triggerTime);
 	}
 
+	/**
+	 * The inactivity auto-close used AlarmManager.set(), which the platform is free to
+	 * batch and which Doze defers outright. A container that should have closed after five
+	 * minutes could therefore stay open for as long as the device stayed idle, which is
+	 * exactly the state the timeout exists for. setExactAndAllowWhileIdle fires through
+	 * Doze and needs no SCHEDULE_EXACT_ALARM permission (that gate is on setExact and
+	 * setAlarmClock), so this costs nothing in the manifest.
+	 */
 	protected static void setCheckTimer(Context context, PendingIntent pi, long triggerTime)
 	{
 		AlarmManager am = (AlarmManager) context.getSystemService(Context.ALARM_SERVICE);
-		am.set(
+		if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+			am.setExactAndAllowWhileIdle(
+					AlarmManager.ELAPSED_REALTIME_WAKEUP,
+					triggerTime,
+					pi
+			);
+		else
+			am.set(
 					AlarmManager.ELAPSED_REALTIME_WAKEUP,
 					triggerTime,
 					pi
@@ -140,8 +158,37 @@ public class LocationsServiceBase extends Service
             };
             registerReceiver(_shutdownReceiver, new IntentFilter(Intent.ACTION_SHUTDOWN));
 			registerReceiver(_shutdownReceiver, new IntentFilter("android.intent.action.QUICKBOOT_POWEROFF"));
-			_inactivityCheckReceiver = new InactivityCheckReceiver();
-			registerReceiver(_inactivityCheckReceiver, new IntentFilter(ACTION_CHECK_INACTIVE_LOCATION));
+			InactivityCheckReceiver icr = new InactivityCheckReceiver();
+			registerReceiver(icr, new IntentFilter(ACTION_CHECK_INACTIVE_LOCATION));
+			// Assigned only after the register returns. A field set before the call means
+			// "non-null but never registered" is reachable, and onDestroy then throws
+			// IllegalArgumentException on the unregister. See onDestroy for why that
+			// mattered: the teardown that closes the containers is downstream of it.
+			_inactivityCheckReceiver = icr;
+			// ACTION_SCREEN_OFF is one of the broadcasts the platform refuses to deliver to a
+			// manifest-declared receiver, so this can only be registered from running code.
+			// The service is the right place: it exists exactly as long as something is open,
+			// which is exactly as long as there is anything to close.
+			BroadcastReceiver sor = new BroadcastReceiver()
+			{
+				@Override
+				public void onReceive(Context context, Intent intent)
+				{
+					if(_settings == null || !_settings.lockOnScreenOff())
+						return;
+					Logger.debug("Screen turned off. Closing locations");
+					// forceClose, deliberately. A container left mounted past a locked screen
+					// is readable by whoever picks the device up, and an open file handle is
+					// not a reason to keep it that way.
+					_locationsManager.closeAllLocations(true, true);
+				}
+			};
+			// No RECEIVER_EXPORTED / RECEIVER_NOT_EXPORTED flag: that is required from
+			// targetSdk 34 and this app is held at 28. Raising targetSdk in M2 must add
+			// ContextCompat.registerReceiver(..., RECEIVER_NOT_EXPORTED) at all eighteen
+			// call sites in this tree, or the app crashes on first start on Android 14.
+			registerReceiver(sor, new IntentFilter(Intent.ACTION_SCREEN_OFF));
+			_screenOffReceiver = sor;
         }
         catch (Exception e)
         {
@@ -172,22 +219,54 @@ public class LocationsServiceBase extends Service
         return Service.START_NOT_STICKY;
 	}
 	
+	/**
+	 * Swiping the task out of recents kills the activity but NOT a started foreground
+	 * service, so before this the containers stayed mounted with no window left to close
+	 * them from except the notification. Upstream never implemented onTaskRemoved at all.
+	 */
+	@Override
+	public void onTaskRemoved(Intent rootIntent)
+	{
+		try
+		{
+			if(_settings != null && _settings.lockOnTaskRemoved() && _locationsManager != null)
+			{
+				Logger.debug("Task removed. Closing locations");
+				_locationsManager.closeAllLocations(true, true);
+			}
+		}
+		catch(Throwable e)
+		{
+			Logger.log(e);
+		}
+		super.onTaskRemoved(rootIntent);
+		// stopSelf so the service does not linger holding a notification for containers it
+		// just closed. onDestroy still runs and still wipes the mirror.
+		if(!hasOpenLocations())
+			stopSelf();
+	}
+
 	@Override
 	public void onDestroy()
 	{
 		Logger.debug("LocationsService onDestroy");
 		stopForeground(true);
-		if(_shutdownReceiver!=null)
+		// Unregistering is best effort and must never decide whether the containers get
+		// closed. unregisterReceiver throws IllegalArgumentException for a receiver that
+		// was never registered, and before this the first throw skipped closeAllLocations
+		// and deleteMirror entirely: the service would die leaving volumes mounted and the
+		// decrypted mirror on disk, which is the exact state onDestroy exists to prevent.
+		_shutdownReceiver = unregisterQuietly(_shutdownReceiver);
+		_inactivityCheckReceiver = unregisterQuietly(_inactivityCheckReceiver);
+		_screenOffReceiver = unregisterQuietly(_screenOffReceiver);
+		try
 		{
-			unregisterReceiver(_shutdownReceiver);
-			_shutdownReceiver = null;
+			TempFilesMonitor.getMonitor(this).stopChangesMonitor();
 		}
-		if(_inactivityCheckReceiver!=null)
+		catch(Throwable e)
 		{
-			unregisterReceiver(_inactivityCheckReceiver);
-			_inactivityCheckReceiver = null;
+			Logger.log(e);
 		}
-		TempFilesMonitor.getMonitor(this).stopChangesMonitor();
 		_locationsManager.closeAllLocations(true, true);
 		deleteMirror();
 		_settings = null;
@@ -197,19 +276,64 @@ public class LocationsServiceBase extends Service
 
 	protected LocationsManager _locationsManager;
     protected Settings _settings;
-	protected BroadcastReceiver _shutdownReceiver, _inactivityCheckReceiver;
+	protected BroadcastReceiver _shutdownReceiver, _inactivityCheckReceiver, _screenOffReceiver;
 
+	/** Returns null so the caller can write the field back in one line. */
+	private BroadcastReceiver unregisterQuietly(BroadcastReceiver r)
+	{
+		if(r != null)
+		{
+			try
+			{
+				unregisterReceiver(r);
+			}
+			catch(Throwable e)
+			{
+				Logger.log(e);
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * These are decrypted copies of the user's files. Util.deleteFiles only unlinks them,
+	 * which leaves the plaintext on the media until the blocks are reused, and the
+	 * per-container close path a few classes over has always wiped its own mirror with
+	 * WipeFilesTask. This is the same content and now gets the same treatment; the two
+	 * paths disagreeing was the bug.
+	 *
+	 * Falls back to the plain delete if the wipe itself fails, because a temp folder left
+	 * on disk is worse than one deleted without an overwrite.
+	 */
 	private void deleteMirror()
 	{
+		Location l = null;
 		try
 		{
-			Location l = FileOpsService.getSecTempFolderLocation(_settings.getWorkDir(),this);
-			if(l!=null)		
-				Util.deleteFiles(l.getCurrentPath());
+			l = FileOpsService.getSecTempFolderLocation(_settings.getWorkDir(),this);
+			if(l == null || !l.getCurrentPath().exists())
+				return;
+			SrcDstRec sdr = new SrcDstRec(new SrcDstSingle(l, null));
+			sdr.setIsDirLast(true);
+			WipeFilesTask.wipeFilesRnd(
+					null,
+					TempFilesMonitor.getMonitor(this).getSyncObject(),
+					true,
+					sdr
+			);
 		}
-		catch (IOException e)
+		catch (Throwable e)
 		{
-			Logger.showAndLog(this, e);
+			Logger.log(e);
+			try
+			{
+				if(l != null)
+					Util.deleteFiles(l.getCurrentPath());
+			}
+			catch (IOException e2)
+			{
+				Logger.showAndLog(this, e2);
+			}
 		}
 	}
 

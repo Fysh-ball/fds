@@ -149,6 +149,10 @@ public interface SettingsCommon
     boolean isFlagSecureEnabled();
 	int getCurrentSettingsVersion();
 	boolean alwaysForceClose();
+	/** Close every open container when the screen turns off. */
+	boolean lockOnScreenOff();
+	/** Close every open container when the task is swiped out of recents. */
+	boolean lockOnTaskRemoved();
 	int getCurrentTheme();
 	ExternalFileManagerInfo getExternalFileManagerInfo();
 	boolean dontUseContentProvider();

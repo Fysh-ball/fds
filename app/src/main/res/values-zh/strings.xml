@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:xliff="http://schemas.android.com/tools">
     <string name="add_container">添加现有容器</string>
-    <string name="eds" translatable="false"><xliff:g id="program_name">EDS Lite</xliff:g></string>
+    <string name="eds" translatable="false"><xliff:g id="program_name">FDS</xliff:g></string>
     <string name="ok">确认</string>
 	<string name="enter_password">输入密码:</string>
 	<string name="select">选取</string>
@@ -21,7 +21,7 @@
 	<string name="settings">设置</string>
 	<string name="bad_container_file_or_wrong_password">密码错误或容器格式不支持</string>
 	<string name="main_settings">主要设置</string>
-	<string name="eds_shortcut"><xliff:g id="program_name">EDS</xliff:g> shortcut</string>
+	<string name="eds_shortcut"><xliff:g id="program_name">FDS</xliff:g> shortcut</string>
 	<string name="enter_widget_title">输入插件标题</string>	
 	<string name="select_path">选取路径</string>
 	<string name="container_size">容器大小</string>
@@ -42,7 +42,7 @@
 	<string name="use_password">使用密码</string>
 	<string name="saving_changes">保存更改</string>
 	<string name="preparing_file">正在准备文件</string>
-	<string name="eds_service_is_running"><xliff:g id="program_name">EDS</xliff:g> 服务正在运行</string>
+	<string name="eds_service_is_running"><xliff:g id="program_name">FDS</xliff:g> 服务正在运行</string>
 	<string name="stop_service_and_exit">停止服务并退出</string>
 	<string name="send_files_to">发送文件到</string>
 	<string name="send">发送</string>
@@ -89,7 +89,7 @@
 	<string name="show_previews">在文件管理器中显示预览</string>
 	<string name="open_read_only">以只读模式打开</string>
 	<string name="disable_wide_screen_layouts">禁用横向布局</string>
-	<string name="close_all_containers">关闭所有<xliff:g id="program_name">EDS</xliff:g> 容器</string>
+	<string name="close_all_containers">关闭所有<xliff:g id="program_name">FDS</xliff:g> 容器</string>
 	<string name="fill_free_space_with_random_data">采用随机数据填充可用空间</string>
 	<string name="ascending">升序</string>
 	<string name="descending">降序</string>
@@ -140,7 +140,7 @@
 	<string name="save_password_desc">保存该容器密码.保存密码可能是不安全的.</string>
 	<string name="enable_full_screen_mode">启用全屏模式</string>
 	<string name="never_save_history">不要保存容器的链接</string>
-	<string name="never_save_history_desc">关闭 <xliff:g id="program_name">EDS</xliff:g>之后，新容器链接将被移除.</string>
+	<string name="never_save_history_desc">关闭 <xliff:g id="program_name">FDS</xliff:g>之后，新容器链接将被移除.</string>
 	<string name="contact_support">联系支持</string>
 	<string name="no_free_space_left">没有可用空间</string>
 	<string name="speed">当前速度: <xliff:g id="current_speed">%1$.1f</xliff:g> Mb/s</string>
@@ -188,7 +188,7 @@
 	<string name="value_has_been_copied">字段值已复制到剪贴板</string>
 	<string name="overwrite_and_delete">覆盖和删除</string>
 	<string name="list_is_empty">列表是空的</string>
-	<string name="hide_eds_screen_from_other_apps">从其他应用程序中隐藏 <xliff:g id="program_name">EDS</xliff:g> 屏幕</string>
+	<string name="hide_eds_screen_from_other_apps">从其他应用程序中隐藏 <xliff:g id="program_name">FDS</xliff:g> 屏幕</string>
 	<string name="toggle_auto_zoom">切换自动缩放</string>
 	<string name="change">更改</string>
 	<string name="do_you_really_want_to_remove_from_the_list">你真的要从列表中移除 <xliff:g id="title">\"%1$s\"</xliff:g> 吗?</string>
@@ -203,7 +203,7 @@
 	<string name="use_external_file_manager">外部文件管理器</string>
 	<string name="use_external_file_manager_desc">容器装载后打开外部文件管理器</string>
 	<string name="builtin_file_manager">内置文件管理器</string>
-	<string name="dont_use_content_provider">在其他应用中,不要使用 EDS content provider 打开解密文件.</string>
+	<string name="dont_use_content_provider">在其他应用中,不要使用 FDS content provider 打开解密文件.</string>
     <string name="dont_use_content_provider_desc">有些应用程序不能使用content providers.</string>
     <string name="uri_of_the_container">容器的URI</string>
     <string name="text_has_been_copied">文本已经复制到剪贴板</string>
@@ -243,48 +243,6 @@
 	<string name="wrong_path">路径错误</string>
 	<string name="encfs_config_file_not_found">EncFs 配置文件未找到</string>
     <string name="container_opened_read_only">该容器已以只读模式打开</string>
-    <string name="changes_text" translatable="false"><![CDATA[<font color="black">
-        <b>2.0.0.212</b>:
-	    <ul>
-	        <li>Better handling of folders with large number of files.</li>
-	        <li>Fixed bugs</li>
-	    </ul>
-        <b>2.0.0.211</b>:
-	    <ul>
-	        <li>Added an option to use temp files instead of pipes even for read-only access.</li>
-	        <li>Added additional parameters to container opening and closing intents (see FAQ).</li>
-	        <li>Added numeric sorting mode to the file manager.</li>
-	        <li>The full version of EDS now has an option to unlock a container using fingerprints.</li>
-	        <li>The full version of EDS now supports opening a LUKS container using a keyfile.</li>
-	        <li>Fixed bugs</li>
-	    </ul>
-        <b>2.0.0.206</b>:
-	    <ul>
-	        <li>"last modified" timestamp of a file is restored after a copy/move operation.</li>
-	        <li>Improved file manager: previously opened folder and scroll position are restored when switching between the containers and/or memory cards</li>
-	        <li>Fixed: password dialog freezes on some systems.</li>
-	    	<li>Fixed: in some cases the remembered password is not working</li>
-	    	<li>Other minor fixes</li>
-		</ul>
-        <b>2.0.0.202</b>:
-	    <ul>
-	    	<li>Added an option to install additional file system modules. Currently ExFAT module is supported which allows to open containers with ExFAT file system.</li>
-		</ul>
-		<b>2.0.0</b>:
-	    <ul>
-	        <li>EDS Lite is now on <a href="https://github.com/sovworks/">GitHub</a>!</li>
-	    	<li>New UI. Please make yourself familiar with the new UI by watching a few <a href="https://sovworks.com/eds/managing-containers.php">videos</a>.</li>
-	    	<li>Android 8 support</li>
-	    	<li>Added VeraCrypt support</li>
-	    	<li>Added LUKS support</li>
-	    	<li>Added EncFs support</li>
-	    	<li>More encryption algorithms supported</li>
-	    	<li>Improved image viewer.</li>
-	    	<li>You can download the previous version using <a href="https://sovworks.com/eds/files/distr/lite/Edslite-v1.2.0.35.apk">this</a> link</li>
-		</ul>
-		</font>]]></string>
-    <string name="donation_notice">这是EDS的开源版本. 请通过购买完整版本，或者捐赠来<b>支持开源版本</b>的发展 .</string>
-    <string name="make_a_donation">捐赠</string>
-    <string name="check_the_full_version">查看完整版本</string>
+
     <string name="check_source_code">查看源代码</string>
 </resources>

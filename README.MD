@@ -19,7 +19,7 @@ Move the file anywhere, open it with any compatible implementation.
 
 ## Status
 
-Not a recommended daily driver yet. What is done and measured, as of 2026-08-22:
+Not a recommended daily driver yet. What is done and measured, as of 2026-08-23:
 
 | | |
 |---|---|
@@ -27,6 +27,7 @@ Not a recommended daily driver yet. What is done and measured, as of 2026-08-22:
 | SDK | compileSdk 35, targetSdk 28, minSdk 24 |
 | ABIs | armeabi-v7a, arm64-v8a, x86, x86_64 |
 | Test oracle | 51 containers built by desktop VeraCrypt 1.26, opened by an instrumented suite on-device |
+| End to end | added, unlocked, listed, written to, closed and reopened through the real UI on an x86_64 emulator |
 
 `targetSdk` is deliberately held at 28 until the scoped-storage milestone; do not
 raise it casually, it will break all file access at once.
@@ -62,17 +63,22 @@ Measured on the x86_64 emulator by `KdfTest#reportPerHashKdfCost`, debug build,
 native code at `-O2`. These are the numbers for ONE hash attempt at VeraCrypt's
 own iteration counts, not for the whole unlock:
 
-| Hash | us/iteration | iterations | one attempt |
-|---|---|---|---|
-| SHA-512 | 74 | 500000 | 37 s |
-| SHA-256 | 111 | 500000 | 55 s |
-| Whirlpool | 121 | 500000 | 61 s |
-| RIPEMD-160 | 445 | 655331 | 292 s |
+| Hash | us/iteration | iterations | one attempt | was |
+|---|---|---|---|---|
+| SHA-512 | 72 | 500000 | 36 s | 37 s |
+| SHA-256 | 64 | 500000 | 32 s | 55 s |
+| Whirlpool | 103 | 500000 | 52 s | 61 s |
+| RIPEMD-160 | 287 | 655331 | 188 s | 292 s |
 
 An unlock tries the hashes in that order and stops at the one that produces a
-header whose CRC checks, so a SHA-512 container costs 37 s and a Whirlpool one
-costs 37 + 55 + 61. A container this fork cannot open costs the whole sweep,
+header whose CRC checks, so a SHA-512 container costs 36 s and a Whirlpool one
+costs 36 + 32 + 52. A container this fork cannot open costs the whole sweep,
 twice, because the hidden header is scanned too.
+
+The `was` column is the same test on the same emulator before two changes: the
+`engineDigest(byte[],int,int)` override on the JNI RIPEMD-160 and Whirlpool, which
+stopped PBKDF2 allocating a throwaway array twice per iteration, and the removal of
+the `javax.crypto.Mac` path described below, which is why SHA-256 nearly halved.
 
 Measured end to end from the app's own log, one wrong passphrase against a 5 MiB
 AES/SHA-512 container on the same emulator:
@@ -84,11 +90,72 @@ AES/SHA-512 container on the same emulator:
 | VeraCrypt, hidden header, all four hashes | the same again |
 | total before the app can say "wrong passphrase" | about 15 minutes |
 
-That is a usability defect, not just a slow test. The container layer can already
-be told which hash and which engine to use (`VolumeLayout.setHashFunc`,
-`setEngine`, both called from `EdsContainerBase.tryLayout`), exactly as desktop
-VeraCrypt lets you pick the PRF; nothing in the UI ever sets them, so every
-unlock and every typo pays the full search. Exposing them is an M3 item.
+That end-to-end run was measured before the two KDF changes above and has not been
+repeated since, so the 15 minutes is a real stopwatch reading of code that no longer
+exists. Derived from the current per-hash table the same sweep is 2 + 2*(36+32+52+188),
+about 10 minutes. It is written as derived because it is: nothing has re-measured it.
+
+That is a usability problem, and the fix was discoverability rather than crypto.
+The hints already existed and were already wired: container format, hash
+algorithm and encryption algorithm are per-container settings (long-press a
+container in Manage containers, then Settings), and PIM is offered per-open
+behind the gear button in the password dialog as well as persistently. What was
+wrong is that they were off the path: three taps deep behind a long-press, unset
+by default, and never suggested by the unlock flow, so the default experience was
+the full sweep and a wrong passphrase that took minutes to be rejected. An
+earlier draft of this section claimed the UI could not set them at all; it can,
+and that claim was wrong.
+
+**FDS now records them itself.** The first successful open already knows exactly
+which format, cipher and hash worked, so `ContainerBasedLocation` writes those
+three down and every later open uses them. The table above collapses to one row:
+one derivation instead of a search, for a correct passphrase and a wrong one
+alike. Measured as a hash count rather than a stopwatch, by
+`OpenHintTest#aHashHintReplacesTheSearchWithOneDerivation`: two hashes tried
+unhinted against a SHA-256 container, one hinted.
+
+Two, not four, because that arm pins the format to VeraCrypt. A real unlock does
+not: `EdsContainer.SUPPORTED_FORMATS` is TrueCrypt, VeraCrypt, LUKS in that
+order, so an unhinted SHA-256 container is measured through the location as
+`[SHA-512, whirlpool, ripemd160, SHA256]`. The first three are the TrueCrypt pass
+at 1000 iterations and cost about a second between them, which is why they never
+appeared on the stopwatch. The first draft of that test asserted two at the
+location level and was wrong about the app, not the other way round.
+
+On the wall clock, through the real UI on the same emulator, an AES/SHA-256
+container: **80 s the first time, 40 s every time after.** The 80 s is a SHA-512
+derivation that cannot match followed by the SHA-256 one that does; the three
+cipher attempts per hash cost nothing measurable, because a wrong cipher fails
+the header CRC without a KDF. The hinted open logs one `Using SHA256 hash
+function` line and one cipher attempt. Those seconds are from the app's own log
+under emulator load and do not match the microbenchmark row above to the second;
+the hash count is the part being asserted.
+
+Both wall-clock figures predate the two KDF changes and have not been repeated, so
+they overstate the current cost: the same two derivations now measure 36 + 32 s
+rather than 37 + 55 s in the microbenchmark. They are left as they were read
+instead of being scaled, because a number nobody measured should not be written as
+if somebody had.
+
+Two things about that are deliberate and neither is an optimisation.
+
+**A hidden open records nothing.** If it did, the recorded hash would be the
+hidden volume's, and someone handed the outer passphrase under duress could mount
+the outer volume, read its real hash out of its own header, and see that the two
+disagree. That difference is proof a hidden volume exists, which is the one thing
+the feature exists to deny. `EdsContainerBase.isHiddenVolumeOpened()` is the flag
+that stops it, and `OpenHintTest#theHiddenFlagDistinguishesTheTwoVolumes` asserts
+it in both directions on the same file. The cost is that a hidden volume keeps
+paying the full search.
+
+**An inferred hint can be thrown away; a hint you set cannot.** They are stored
+in separate fields for exactly that reason. If the file at that path is replaced
+by a different container the inferred hash stops matching, and nothing in
+`EdsContainerBase.tryLayout` retries a failed hint on the normal pass, so the
+container would be permanently unopenable. An inferred hint that fails is
+therefore discarded and the full search is run once. A hint the user typed is
+left in force and the open is allowed to fail, because the alternative is the app
+deciding it knows the container better than the person who answered.
 
 Two things follow. First, the hash order in `StdLayout` and `VolumeLayout` is a
 cost decision and nothing else: a wrong hash cannot pass the header CRC, so
@@ -101,6 +168,63 @@ measurement of `-O0`.
 A phone is not this emulator and these are not phone numbers. What they are good
 for is the shape: the ratios between the hashes, and the fact that an unsupported
 container is by far the most expensive thing the app can be asked to do.
+
+### The unlock that killed the app
+
+Until 2026-08-23 an unhinted VeraCrypt open on the emulator was killed by the Android
+low-memory killer before it finished. It presented as flakiness: one test in
+`OpenHintTest` "failed" with an empty `<failure>` element and the run ended with
+`Process crashed`, while the same test passed on its own and had passed in a full
+34-test run. Two things made it look like host pressure rather than a defect, and both
+were wrong.
+
+The cause was `javax.crypto.Mac`. It had been put on the PBKDF2 inner loop in M1 as an
+optimisation, on the reasoning that one native HMAC call per iteration must beat the
+generic implementation's six MessageDigest calls. Conscrypt allocates a fresh native
+`HMAC_CTX` inside every `doFinal()`, and PBKDF2 calls `doFinal` once per iteration. The
+Java object wrapping that context is a few dozen bytes, so nothing ever provoked a GC
+while the native heap filled. At the moment of the kill the process held 1.58 GB RSS
+against a 108 MB Dalvik heap, with the whole balance in `[anon:scudo:primary]`, inside
+a guest with 1536 MB of RAM:
+
+```
+lowmemorykiller: Kill 'site.fysh.fds' (27847), uid 10192, oom_score_adj 0
+  to free 1583048kB rss, 1414692kB swap; reason: min watermark is breached
+```
+
+`HmacNativeMemoryTest` measures both implementations in the same process, three rounds,
+with the order swapped on the middle round so warm-up cannot be mistaken for a property
+of the code. Over 200000 iterations, two independent runs:
+
+| | round 0 | round 1 | round 2 |
+|---|---|---|---|
+| generic HMAC, RSS delta | +4 MB | -124 MB | -61 MB |
+| `javax.crypto.Mac`, RSS delta | +120 MB | +109 MB | +140 MB |
+| generic HMAC, elapsed | 9169 ms | 7338 ms | 6112 ms |
+| `javax.crypto.Mac`, elapsed | 11301 ms | 9452 ms | 8629 ms |
+
+The negative deltas are the collector catching up with the previous round's Mac garbage
+during the generic loop. The Mac path grew the process on all six rounds across both
+runs and never once shrank it. It was also slower on five of those six rounds; the
+exception is the first round of a run, which pays class loading in whichever arm goes
+first.
+
+So the optimisation was wrong in both directions, and the fix was to delete it.
+`MacHMAC` now lives in the test sources, out of the shipped APK, doing two jobs that are
+worth keeping. It is the byte-for-byte oracle `KdfTest` compares the hand-rolled
+ipad/opad loop against, since an HMAC wrong by one byte produces a wrong master key and
+an unopenable container with nothing reporting an error. And it is the positive control
+in `HmacNativeMemoryTest`: an assertion that the production path "does not grow the
+native heap" passes just as green when the loop never ran, when `/proc` stops answering,
+and when the measurement itself is broken, so the same run has to contain something that
+does grow and does get caught.
+
+Peak RSS for the class that was being killed: 1.58 GB before, 286 MB after.
+
+Two things about the diagnosis are worth writing down. A `Runtime.totalMemory()` check
+would have reported this leak absent, because none of it was on the Java heap. And the
+first two runs were read as host memory pressure, which was a real condition at the time
+(15 GB box, 4 GB available, six concurrent sessions) and had nothing to do with it.
 
 ### Hidden volumes
 
@@ -125,6 +249,82 @@ use desktop VeraCrypt for that.
 Not implemented, and not merely switched off. The whole tree contains three
 references to the feature and none of them is an implementation. See NOTICE.
 
+### Branding and the About dialog
+
+The app called itself "EDS Lite" everywhere: one string drives the launcher label,
+the task title and the About dialog, and it had not been touched. It now says FDS,
+along with the eight other user-visible strings that named the old program. The two
+that still say "EDS Lite" are version-history entries about releases sovworks made,
+and rewriting those would put words in upstream's mouth.
+
+Three things in the About dialog were pointed at a vendor that stopped shipping in
+2020 and are gone or repointed:
+
+| Was | Now |
+|---|---|
+| "Make a donation" -> sovworks.com | removed |
+| "Check the full version" -> the paid EDS on Google Play | removed |
+| "Check the source code" -> sovworks/edslite | this repository |
+| Support mail -> eds@sovworks.com | Admin@fysh.site |
+
+A fork whose premise is that those features should not have been paywalled has no
+business shipping a button that sells them. Upstream's repository is still recorded,
+as `GlobalConfig.UPSTREAM_SOURCE_URL` and in NOTICE, because GPL attribution needs
+somewhere to point; it is provenance, not this app's home.
+
+### Automatic locking
+
+Upstream had none. The only thing that ever closed a container by itself was a
+per-container inactivity timer whose default is `-1`, so out of the box nothing
+closed a container except the user, and a container left mounted stayed mounted
+across a locked screen.
+
+Two locks, both defaulting **on**, both switchable in Settings:
+
+| Setting | Trigger | Why |
+|---|---|---|
+| Close containers when the screen turns off | `ACTION_SCREEN_OFF` | the threat model starts with a device that left its owner's hands, and a mounted container is readable by whoever picks it up |
+| Close containers when the app is swiped away | `Service.onTaskRemoved` | removing the app from recents leaves the background service running, so without this the container outlives the visible app |
+
+`ACTION_SCREEN_OFF` cannot be declared in the manifest, so the receiver is
+registered by `LocationsServiceBase` at runtime and unregistered in `onDestroy`.
+The close is forced, so unsaved data can be lost: that trade is stated in the
+setting's own description rather than buried here.
+
+**Writes inside a mounted container are buffered until close.** A crash, a kill,
+or a battery pull loses them. That is inherited behaviour, not something these
+locks introduced, but the locks make it reachable more often, and it is not fixed
+yet.
+
+### Temp files and wiping
+
+Opening a file from a container with another app decrypts it to a temp file,
+which `WipeFilesTask` is supposed to erase. Two defects were found in that path
+and neither was visible from the call site:
+
+- It seeded `java.util.Random` from the clock. The bytes that overwrote plaintext
+  were reconstructible from the seed, so the overwrite was a pattern, not noise.
+  Now `SecureRandom`, which costs nothing measurable at 4 KiB a block.
+- It opened the file through `getOutputStream()`, which **truncates to zero** and
+  then writes the replacement bytes. A filesystem is free to place the new extent
+  anywhere, so the blocks holding the plaintext were released unwritten. It also
+  always wrote whole 4 KiB blocks, so a 10000-byte file came back 12288 bytes
+  long. Now opened `ReadWrite` through `RandomAccessIO`, never writing past the
+  original length.
+
+Still best effort, and this is not a guarantee on flash: wear levelling can
+retire the original block instead of rewriting it, and no userspace overwrite can
+reach it. The real defence is that these files should not hold plaintext for
+long.
+
+The overwrite is split out of `wipeFileRnd` as `overwriteFileRnd` so that it can
+be tested at all. A wipe destroys its own evidence by design, so a test of the
+combined call can only observe that the file is gone, which is equally true of a
+wipe that wrote nothing.
+
+Mirror deletion in `LocationsServiceBase.deleteMirror()` now goes through the
+wipe instead of unlinking.
+
 ## MILESTONES
 
 - **M0 build resurrection** - done
@@ -133,20 +333,29 @@ references to the feature and none of them is an implementation. See NOTICE.
   two-volume container, `tools/run-fixture-tests.sh` pushes them and runs the
   instrumented suite. Fixtures are never created by this app, so the fork is
   never checked against its own writer.
-- **M2 scoped storage** - SAF, DocumentsProvider, targetSdk 35
+- **M2 scoped storage** - SAF, DocumentsProvider, targetSdk 35. Raising
+  `targetSdk` past 33 also makes the `RECEIVER_EXPORTED` / `RECEIVER_NOT_EXPORTED`
+  flag mandatory on every runtime `registerReceiver`: there are eighteen call
+  sites across `LocationsServiceBase`, `LocationsManagerBase`, `FileManagerActivityBase`
+  and `LocationListBaseFragment`, and an unflagged one throws on first start on
+  Android 14 rather than at build time
 - **M3 unlock the gated features** - hidden volumes done, VeraCrypt passphrase
-  cap raised from TrueCrypt's 64 to VeraCrypt's 128. Outstanding: outer-volume
-  protection, hidden volume creation, keyfiles (has to be written from scratch),
-  PIM and hash/cipher selection exposed in the UI
-- **M4 hardening** - `allowBackup=false` done, `FLAG_SECURE` now defaults on.
-  Outstanding: key zeroing audit, auto-lock, no persisted trace that a container
-  has a hidden volume, and an audit of the decrypt-to-temp path. That last one is
-  not a stray copy to fix but a feature: `TempFilesMonitor`, `PrepareTempFilesTask`
-  and `ClearTempFolderTask` exist so another app can open a file out of a
-  container, and the temp folder is `getWorkDir()`, which defaults to the empty
-  string. What it resolves to, whether it survives a lock, and whether it is
-  overwritten rather than unlinked are three separate questions and none of them
-  has been measured yet
+  cap raised from TrueCrypt's 64 to VeraCrypt's 128, and the format/cipher/hash
+  of a successful open are now remembered instead of being left buried in a
+  long-press menu. Outstanding: outer-volume protection, hidden volume creation,
+  keyfiles (has to be written from scratch)
+- **M4 hardening** - `allowBackup=false`, `FLAG_SECURE` on by default, both
+  automatic locks, the key-zeroing pass and the wipe fix are done. The zeroing
+  pass covered the three paths that leaked key material on the failure branch:
+  `EdsContainerBase.close()` skipped `_layout.close()` (the call that zeroes the
+  master key) whenever the filesystem close threw; `EdsContainerBase.tryLayout()`
+  left the cloned passphrase alive on every wrong-password attempt, which for
+  LUKS is every attempt; and `luks.VolumeLayout.tryPassword()` left the
+  anti-forensic buffer, the derived key and a rejected master key in the heap.
+  Outstanding: no persisted trace that a container has a hidden volume,
+  `SecureBuffer.closeAll()` still has zero callers, and the temp folder is
+  `getWorkDir()`, which defaults to the empty string - what it resolves to and
+  whether it survives a lock are still unmeasured
 - **M5 release** - F-Droid
 
 ## Testing
@@ -163,15 +372,44 @@ the crypto can only be exercised on a real ABI.
 |---|---|---|
 | `ContainerFixtureTest` | supported containers open and round-trip; a sample of the unsupported ones do not; a wrong passphrase does not | desktop VeraCrypt 1.26 |
 | `HiddenVolumeTest` | both volumes of a two-volume container open, and their contents differ | desktop VeraCrypt 1.26 |
-| `KdfTest` | PBKDF2 against published vectors; the `javax.crypto.Mac` fast path agrees byte for byte with the generic HMAC; per-hash cost | OpenSSL via Python `hashlib` |
+| `KdfTest` | PBKDF2 against published vectors; the generic HMAC agrees byte for byte with the platform's own; per-hash cost | OpenSSL via Python `hashlib` |
 | `CipherKatTest` | AES-XTS, RIPEMD-160 and Whirlpool known answers; Serpent and Twofish round-trip and are distinct from AES | OpenSSL |
 | `UnsupportedMatrixTest` | the FULL negative matrix, all 41 | desktop VeraCrypt 1.26 |
+| `HardeningTest` | both automatic locks default on and can be turned off; the wipe preserves the file length and covers the partial last block; the wipe still deletes | the filesystem itself, and a known-bad build of each arm |
+| `HmacNativeMemoryTest` | the PBKDF2 inner loop does not grow the native heap, with `javax.crypto.Mac` in the same run as the positive control that proves the measurement can see a leak | `/proc/self/status` VmRSS |
+| `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
+
+Every arm of `HardeningTest` has been run against a build with that specific
+behaviour reverted, because a test of a property that has no visible symptom is
+worth exactly as much as the proof that it can go red. Five arms, two known-bad
+builds:
+
+| Arm | Known-bad | What it said |
+|---|---|---|
+| length preserved | upstream `getOutputStream()` body | `expected:<10000> but was:<12288>` |
+| tail covered | whole 4 KiB blocks only, partial tail skipped | `the last partial block (bytes 8192..10000) still holds the original plaintext` |
+| defaults on | `DefaultSettingsCommon` returning false | `screen-off lock must default on` |
+| can be turned off | getters returning a constant instead of reading the preference | `the screen-off preference is not read` |
+| wipe deletes | `file.delete()` removed from the `finally` | `wipeFileRnd left the file behind` |
+
+The two wipe arms fail against different builds and pass against each other's,
+which is the point: they are two assertions, not one test written twice.
 
 `UnsupportedMatrixTest` is `@LargeTest` and the runner excludes it unless you
 name it, because every fixture in it pays the whole hash sweep twice. The
 default run says out loud that it skipped it, and the sampled arm inside
 `ContainerFixtureTest` prints the fixtures it did not test. A coverage cut that
 leaves no trace reads afterwards as coverage.
+
+The TrueCrypt format has no fixture at all, and the README should not imply
+otherwise: every container in the oracle is VeraCrypt. The reason is the tool,
+not the format. VeraCrypt 1.26's GUI has a TrueCrypt mode but its command line
+does not expose one, so `mkfixtures.sh` cannot produce a TrueCrypt volume.
+`tcplay` can, and is packaged, but is not installed on this build host. Until
+that is settled, TrueCrypt support here is inherited and unmeasured. It is also
+the cheap half of the matrix to test: TrueCrypt uses 1000 iterations (2000 for
+RIPEMD-160) against VeraCrypt's 500000, so a whole TrueCrypt matrix would cost
+less than one VeraCrypt fixture.
 
 Serpent and Twofish have no known-answer test here and that is a real gap, not
 an oversight: OpenSSL implements neither, so there is no second implementation
