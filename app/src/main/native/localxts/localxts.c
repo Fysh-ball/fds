@@ -42,7 +42,21 @@ JNIEXPORT jlong JNICALL Java_com_sovworks_eds_crypto_LocalEncryptedFileXTS_initC
     const char *path = (*env)->GetStringUTFChars(env, pathString, NULL);
     if (path == NULL)
         return 0;
-    int fd = open(path,readOnly ? O_RDONLY : (O_RDWR | O_CREAT));
+    /*
+     * O_CREAT was here without a mode argument. On any bionic built with
+     * _FORTIFY_SOURCE, which is every current Android, that is not a warning:
+     * __open_2 calls __fortify_fatal and the process takes SIGABRT with
+     * "FORTIFY: open: called with O_CREAT/O_TMPFILE but no mode". So every
+     * read-write open of a local container through this fast path killed the
+     * app outright, and the only reason it was not noticed is that the crash
+     * is in the branch the emulator's own test containers never took.
+     *
+     * The mode is not the fix. O_CREAT itself is wrong here: this opens an
+     * EXISTING container to decrypt it. Creating an empty file when the path
+     * is missing produces a zero-length container whose header cannot be read,
+     * turning "that file is gone" into "your container is corrupt".
+     */
+    int fd = open(path, readOnly ? O_RDONLY : O_RDWR);
     if(fd<0)
     {
         (*env)->ReleaseStringUTFChars(env, pathString, path);
@@ -61,6 +75,9 @@ JNIEXPORT jlong JNICALL Java_com_sovworks_eds_crypto_LocalEncryptedFileXTS_initC
     ctx->xts->allow_skip = 0;
     ctx->fd = fd;
     ctx->is_buffer_empty = 1;
+    /* Every early return released this; the success path did not, so the UTF-8
+     * copy of the container path leaked on every successful open. */
+    (*env)->ReleaseStringUTFChars(env, pathString, path);
     return (jlong)ctx;
 }
 

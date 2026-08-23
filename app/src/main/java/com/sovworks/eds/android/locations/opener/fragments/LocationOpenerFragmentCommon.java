@@ -10,6 +10,7 @@ import com.sovworks.eds.crypto.SecureBuffer;
 import com.sovworks.eds.exceptions.WrongPasswordException;
 import com.sovworks.eds.locations.Location;
 import com.sovworks.eds.locations.LocationsManager;
+import com.sovworks.eds.locations.ContainerLocation;
 import com.sovworks.eds.locations.Openable;
 
 public class LocationOpenerFragmentCommon extends LocationOpenerBaseFragment implements PasswordDialog.PasswordReceiver
@@ -43,6 +44,12 @@ public class LocationOpenerFragmentCommon extends LocationOpenerBaseFragment imp
 
             if(param.containsKey(Openable.PARAM_PASSWORD))
                 location.setPassword(param.getParcelable(Openable.PARAM_PASSWORD));
+            // Containers only. Nothing else can hold a second volume, so nothing else has a
+            // second passphrase to be given, and an instanceof here keeps the concept off
+            // every other Openable rather than adding a method they would all answer no to.
+            if(location instanceof ContainerLocation && param.containsKey(Openable.PARAM_PROTECTION_PASSWORD))
+                ((ContainerLocation) location).setHiddenVolumeProtectionPassword(
+                        param.getParcelable(Openable.PARAM_PROTECTION_PASSWORD));
             if(param.containsKey(Openable.PARAM_KDF_ITERATIONS))
                 location.setNumKDFIterations(param.getInt(Openable.PARAM_KDF_ITERATIONS));
 
@@ -143,6 +150,15 @@ public class LocationOpenerFragmentCommon extends LocationOpenerBaseFragment imp
             if(sb!=null && (sb.length() > 0 || !args.containsKey(Openable.PARAM_PASSWORD)))
                 args.putParcelable(Openable.PARAM_PASSWORD, sb);
         }
+        if(passwordDialogResultBundle.containsKey(Openable.PARAM_PROTECTION_PASSWORD))
+        {
+            SecureBuffer sb = passwordDialogResultBundle.getParcelable(Openable.PARAM_PROTECTION_PASSWORD);
+            // Copied across even when empty, unlike the passphrase above. An empty one is the
+            // user clearing a field they filled in on a previous attempt, and dropping it
+            // would silently keep protecting with the old value.
+            if(sb != null)
+                args.putParcelable(Openable.PARAM_PROTECTION_PASSWORD, sb);
+        }
         if(passwordDialogResultBundle.containsKey(Openable.PARAM_KDF_ITERATIONS))
             args.putInt(Openable.PARAM_KDF_ITERATIONS, passwordDialogResultBundle.getInt(Openable.PARAM_KDF_ITERATIONS));
     }
@@ -167,6 +183,9 @@ public class LocationOpenerFragmentCommon extends LocationOpenerBaseFragment imp
         Bundle res = new Bundle();
         res.putAll(pd.getOptions());
         res.putParcelable(Openable.PARAM_PASSWORD, new SecureBuffer(pd.getPassword()));
+        char[] prot = pd.getProtectionPassword();
+        if(prot != null)
+            res.putParcelable(Openable.PARAM_PROTECTION_PASSWORD, new SecureBuffer(prot));
         return res;
     }
 }

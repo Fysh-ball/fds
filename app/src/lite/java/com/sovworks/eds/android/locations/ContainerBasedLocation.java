@@ -4,12 +4,14 @@ import android.content.Context;
 import android.net.Uri;
 
 import com.sovworks.eds.android.Logger;
+import com.sovworks.eds.android.R;
 import com.sovworks.eds.android.errors.UserException;
 import com.sovworks.eds.android.errors.WrongPasswordOrBadContainerException;
 import com.sovworks.eds.android.helpers.ContainerOpeningProgressReporter;
 import com.sovworks.eds.android.settings.UserSettings;
 import com.sovworks.eds.container.ContainerFormatInfo;
 import com.sovworks.eds.container.EdsContainer;
+import com.sovworks.eds.container.HiddenVolumeProtectionFailedException;
 import com.sovworks.eds.container.VolumeLayout;
 import com.sovworks.eds.container.VolumeLayoutBase;
 import com.sovworks.eds.crypto.FileEncryptionEngine;
@@ -202,6 +204,16 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 			attemptOpen();
 			opened = true;
 		}
+		catch(HiddenVolumeProtectionFailedException e)
+		{
+			// Deliberately ABOVE the WrongFileFormatException handler and deliberately not
+			// retried. The retry below exists for a stale learned hint; this failure means
+			// the second passphrase opened no hidden volume, and running the open again
+			// would either fail the same way or, worse, succeed with protection off.
+			getSharedData().container = null;
+			Logger.debug("Refusing the mount: " + e.getMessage());
+			throw new UserException(getContext(), R.string.hidden_volume_protection_failed);
+		}
 		catch(WrongFileFormatException e)
 		{
 			// A hint the app inferred for itself must never be able to lock the user out of
@@ -259,6 +271,11 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 		cnt.setEncryptionEngineHint(null);
 		cnt.setHashFuncHint(null);
 		cnt.setNumKDFIterations(0);
+		// Cleared before it is set, like the three hints above. attemptOpen() is called twice
+		// on the retry path, and a stale array left on the container from a previous attempt
+		// has already been zeroed by the finally below: it would then be a valid-looking
+		// passphrase of the right length made entirely of nulls.
+		cnt.setHiddenVolumeProtectionPassword(null);
 		if(_openingProgressReporter!=null)
 			cnt.setProgressReporter((ContainerOpeningProgressReporter) _openingProgressReporter);
 		ContainerFormatInfo cfi = getContainerFormatInfo();
@@ -284,6 +301,9 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 			cnt.setNumKDFIterations(numKDFIterations);
 
 		byte[] pass = getFinalPassword();
+		byte[] protPass = getProtectionPasswordBytes();
+		if(protPass != null)
+			cnt.setHiddenVolumeProtectionPassword(protPass);
 		try
 		{
 			cnt.open(pass);
@@ -297,10 +317,31 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 		{
 			if(pass!=null)
 				Arrays.fill(pass, (byte) 0);
+			// open() copies what it needs out of this before it returns or throws, so the
+			// working array is dead either way. The SecureBuffer it came from is untouched:
+			// the retry path calls attemptOpen() again and needs to read it a second time.
+			if(protPass!=null)
+				Arrays.fill(protPass, (byte) 0);
 		}
 		// Deliberately outside the try. The container IS open at this point, and a defect in
 		// the bookkeeping below must not run the catch above and discard it.
 		learnHintsFrom(cnt);
+	}
+
+	/**
+	 * The protection passphrase as bytes, or null if none was given.
+	 *
+	 * An empty buffer counts as none. A zero-length passphrase would otherwise be handed to
+	 * EdsContainer, fail to open any hidden volume, and refuse the whole mount: the user who
+	 * simply left the field blank would be told their container is broken.
+	 */
+	private byte[] getProtectionPasswordBytes()
+	{
+		SecureBuffer sb = getSharedData().hiddenVolumeProtectionPassword;
+		if(sb == null)
+			return null;
+		byte[] b = sb.getDataArray();
+		return b != null && b.length > 0 ? b : null;
 	}
 
 	/**
@@ -398,6 +439,15 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 			}
 			getSharedData().container = null;
 		}
+		// Zeroed on every close, including a forced one. super.close() does this for the
+		// ordinary passphrase and would leave this one resident for the life of the process,
+		// which is the longest-lived secret the app would be holding.
+		SecureBuffer prot = getSharedData().hiddenVolumeProtectionPassword;
+		if(prot != null)
+		{
+			prot.close();
+			getSharedData().hiddenVolumeProtectionPassword = null;
+		}
 		com.sovworks.eds.android.Logger.debug("Container has been closed");
 	}
 
@@ -411,6 +461,15 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 	public ContainerBasedLocation copy()
 	{
 		return new ContainerBasedLocation(this);
+	}
+
+	@Override
+	public synchronized void setHiddenVolumeProtectionPassword(SecureBuffer pass)
+	{
+		SecureBuffer p = getSharedData().hiddenVolumeProtectionPassword;
+		if(p != null && p != pass)
+			p.close();
+		getSharedData().hiddenVolumeProtectionPassword = pass;
 	}
 
 	@Override
@@ -439,6 +498,13 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 		}
 
 		public EdsContainer container;
+		/**
+		 * The hidden volume's passphrase, held only for as long as the container is open and
+		 * never written to disk. Lives in SharedData beside the ordinary passphrase because
+		 * every copy() of this location has to see the same one: the copy the opening task
+		 * runs against is not the copy the dialog set it on.
+		 */
+		public SecureBuffer hiddenVolumeProtectionPassword;
 	}
 
 	public static final int MAX_PASSWORD_LENGTH = 64;

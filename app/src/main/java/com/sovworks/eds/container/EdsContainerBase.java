@@ -90,26 +90,150 @@ public abstract class EdsContainerBase implements Closeable
 	{
 		Logger.debug("Opening container at " + _pathToContainer.getPathString());
 		_isHiddenVolumeOpened = false;
+		_protectedStart = _protectedEnd = -1;
 		RandomAccessIO t = openFile();
 		try
 		{
-			if(_containerFormat == null)
-			{
-				if(tryLayout(t, password, false) || tryLayout(t, password, true))
-					return;
-			}
-			else
-			{
-				if(tryLayout(_containerFormat, t, password, false) || tryLayout(_containerFormat, t, password, true))
-					return;
-			}
+			if(!tryOpenAnyLayout(t, password))
+				throw new WrongFileFormatException();
+			// Deliberately inside the try, while t is still open. Reading the hidden header
+			// needs the raw container file, and the finally below closes it; doing this after
+			// open() returned would mean opening the file a second time.
+			initHiddenVolumeProtection(t);
 		}
 		finally
 		{
 			t.close();
 		}
+	}
 
-		throw new WrongFileFormatException();
+	private boolean tryOpenAnyLayout(RandomAccessIO t, byte[] password) throws IOException, ApplicationException
+	{
+		if(_containerFormat == null)
+			return tryLayout(t, password, false) || tryLayout(t, password, true);
+		return tryLayout(_containerFormat, t, password, false)
+				|| tryLayout(_containerFormat, t, password, true);
+	}
+
+	/**
+	 * Outer-volume protection, which is VeraCrypt's name for it.
+	 *
+	 * Give this the HIDDEN volume's passphrase before open(). The outer volume then mounts
+	 * read-write as normal; the hidden header is decrypted exactly once, purely to learn which
+	 * bytes the hidden volume occupies, and its key is zeroed immediately afterwards. Writes
+	 * that would land on those bytes are refused. The hidden volume is never mounted and its
+	 * contents are never read.
+	 *
+	 * Without this, opening the outer volume of a container that has a hidden one and copying
+	 * a single file into it destroys the hidden volume. The outer filesystem cannot see the
+	 * hidden volume by construction, so it allocates straight through it.
+	 *
+	 * The array is not copied and not zeroed here. The caller owns it; open() consumes it and
+	 * drops the reference as soon as the extent is known.
+	 */
+	public void setHiddenVolumeProtectionPassword(byte[] password)
+	{
+		_hiddenProtectionPassword = password;
+	}
+
+	/** True only after open() actually established the protected range. */
+	public boolean isHiddenVolumeProtectionEnabled()
+	{
+		return _protectedStart >= 0 && _protectedEnd > _protectedStart;
+	}
+
+	/**
+	 * Every exit that is not "protection is now in force" throws. A protection passphrase that
+	 * opens no hidden volume is the dangerous case: carrying on would mount the outer volume
+	 * read-write with protection silently off, which looks identical to a protected mount right
+	 * up until the hidden volume is gone.
+	 */
+	protected void initHiddenVolumeProtection(RandomAccessIO containerFile) throws IOException, ApplicationException
+	{
+		byte[] pass = _hiddenProtectionPassword;
+		_hiddenProtectionPassword = null;
+		if(pass == null)
+			return;
+		if(_isHiddenVolumeOpened)
+			throw new HiddenVolumeProtectionFailedException(
+					"the first passphrase opened the hidden volume, not the outer one, so "
+					+ "there is no outer volume here to protect it from");
+		if(_containerFormat == null || !_containerFormat.hasHiddenContainerSupport())
+			throw new HiddenVolumeProtectionFailedException(
+					"the container format " + (_containerFormat == null ? "(unknown)" : _containerFormat.getFormatName())
+					+ " has no hidden volumes, so protection cannot be established");
+
+		VolumeLayout hidden = readHiddenLayout(containerFile, pass);
+		if(hidden == null)
+			throw new HiddenVolumeProtectionFailedException(
+					"no hidden volume opened with the protection passphrase. Either the "
+					+ "passphrase is wrong or this container has no hidden volume: those two "
+					+ "are indistinguishable by design and neither one is safe to write to.");
+		try
+		{
+			long fileSize = containerFile.length();
+			long outerStart = _layout.getEncryptedDataOffset();
+			long outerSize = _layout.getEncryptedDataSize(fileSize);
+			long hiddenStart = hidden.getEncryptedDataOffset();
+			long hiddenSize = hidden.getEncryptedDataSize(fileSize);
+			// A hidden volume that does not sit inside the outer data area means the two
+			// headers disagree about the geometry of the same file. Refuse rather than clamp:
+			// a clamped range protects the wrong bytes and still reports success.
+			if(hiddenSize <= 0 || hiddenStart < outerStart
+					|| hiddenStart - outerStart + hiddenSize > outerSize)
+				throw new HiddenVolumeProtectionFailedException(
+						"the hidden volume at [" + hiddenStart + ", " + (hiddenStart + hiddenSize)
+						+ ") does not lie inside the outer data area [" + outerStart + ", "
+						+ (outerStart + outerSize) + "), so the two headers disagree about this file");
+			_protectedStart = hiddenStart - outerStart;
+			_protectedEnd = _protectedStart + hiddenSize;
+			Logger.debug("Hidden volume protection active over outer bytes ["
+					+ _protectedStart + ", " + _protectedEnd + ")");
+		}
+		finally
+		{
+			// The extent was the only thing wanted. Closing zeroes the hidden master key and
+			// the layout's copy of the hidden passphrase, so neither is resident for the life
+			// of the mount.
+			hidden.close();
+		}
+	}
+
+	/**
+	 * Reads the hidden header without touching _layout, _containerFormat or
+	 * _isHiddenVolumeOpened, which is why this is not tryLayout(). Returns null when no hidden
+	 * volume opens, and an absent hidden volume is not distinguishable from a wrong passphrase
+	 * here any more than it is anywhere else.
+	 *
+	 * No engine or hash hint is applied. Those hints describe the OUTER volume, and a hidden
+	 * volume is free to use a different cipher and a different hash: pinning them would make a
+	 * legitimately different hidden volume look absent, which this code turns into a refused
+	 * mount.
+	 */
+	protected VolumeLayout readHiddenLayout(RandomAccessIO containerFile, byte[] password) throws IOException, ApplicationException
+	{
+		VolumeLayout vl = _containerFormat.getHiddenVolumeLayout();
+		if(vl == null)
+			return null;
+		boolean adopted = false;
+		try
+		{
+			vl.setOpeningProgressReporter(_progressReporter);
+			vl.setPassword(cutPassword(password, _containerFormat.getMaxPasswordLength()));
+			if(_containerFormat.hasCustomKDFIterationsSupport() && _numKDFIterations > 0)
+				vl.setNumKDFIterations(_numKDFIterations);
+			if(vl.readHeader(containerFile))
+			{
+				adopted = true;
+				return vl;
+			}
+			return null;
+		}
+		finally
+		{
+			if(!adopted)
+				vl.close();
+		}
 	}
 	
 	public FileSystem getEncryptedFS() throws IOException, UserException
@@ -122,10 +246,16 @@ public abstract class EdsContainerBase implements Closeable
 		if(_layout == null)
 			throw new IOException("The container is closed");
 		EncryptionEngine enc = _layout.getEngine();
-		return allowLocalXTS() ?
+		RandomAccessIO io = allowLocalXTS() ?
 				new LocalEncryptedFileXTS(_pathToContainer.getPathString(), isReadOnly, _layout.getEncryptedDataOffset(), (XTS)enc)
 				:
 				new EncryptedFileWithCache(_pathToContainer,isReadOnly ? AccessMode.Read : AccessMode.ReadWrite,_layout);
+		// The wrap goes here, around the DECRYPTED view, because this is the only object the
+		// filesystem ever writes through. Both branches present offset 0 as the first byte of
+		// the outer data area, which is the frame the protected range is expressed in.
+		return isHiddenVolumeProtectionEnabled()
+				? new HiddenVolumeProtectingIO(io, _protectedStart, _protectedEnd)
+				: io;
 	}
 
 	public synchronized FileSystem getEncryptedFS(boolean isReadOnly) throws IOException, UserException
@@ -278,6 +408,9 @@ public abstract class EdsContainerBase implements Closeable
 
 	protected MessageDigest _messageDigest;
 	private boolean _isHiddenVolumeOpened;
+	private byte[] _hiddenProtectionPassword;
+	private long _protectedStart = -1;
+	private long _protectedEnd = -1;
 
 	protected abstract List<ContainerFormatInfo> getFormats();
 

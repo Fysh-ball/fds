@@ -19,7 +19,9 @@ import com.sovworks.eds.android.R;
 import com.sovworks.eds.android.helpers.Util;
 import com.sovworks.eds.android.settings.activities.OpeningOptionsActivity;
 import com.sovworks.eds.android.views.EditSB;
+import com.sovworks.eds.container.ContainerFormatInfo;
 import com.sovworks.eds.crypto.SecureBuffer;
+import com.sovworks.eds.locations.ContainerLocation;
 import com.sovworks.eds.locations.LocationsManager;
 import com.sovworks.eds.locations.Openable;
 import com.trello.rxlifecycle3.components.RxDialogFragment;
@@ -105,6 +107,20 @@ public abstract class PasswordDialogBase extends RxDialogFragment
         else
             _repeatPasswordSB = null;
 
+        _protectionPasswordEditText = v.findViewById(R.id.protection_password_et);
+        if(_protectionPasswordEditText != null && hasHiddenVolumeProtection())
+        {
+            _protectionPasswordSB = SecureBuffer.reserveChars(50);
+            _protectionPasswordEditText.setVisibility(View.VISIBLE);
+            _protectionPasswordEditText.setSecureBuffer(_protectionPasswordSB);
+        }
+        else
+        {
+            _protectionPasswordSB = null;
+            if(_protectionPasswordEditText != null)
+                _protectionPasswordEditText.setVisibility(View.GONE);
+        }
+
         View passwordLayout = v.findViewById(R.id.password_layout);
         if(passwordLayout!=null)
         {
@@ -161,6 +177,11 @@ public abstract class PasswordDialogBase extends RxDialogFragment
             _repeatPasswordSB.close();
             _repeatPasswordSB = null;
         }
+        if(_protectionPasswordSB != null)
+        {
+            _protectionPasswordSB.close();
+            _protectionPasswordSB = null;
+        }
     }
 
     @Override
@@ -196,6 +217,45 @@ public abstract class PasswordDialogBase extends RxDialogFragment
         return null;
     }
 
+    /**
+     * The hidden volume's passphrase, or null if the field is not shown. An EMPTY array is
+     * returned when the field is shown and left blank, and that is not the same thing: null
+     * means "this dialog never offered protection", empty means "the user declined it this
+     * time", and the second has to reach the location so a value from a previous attempt is
+     * cleared rather than reused.
+     */
+    public char[] getProtectionPassword()
+    {
+        if(!hasHiddenVolumeProtection() || _protectionPasswordEditText == null)
+            return null;
+        Editable pwd = _protectionPasswordEditText.getText();
+        char[] res = new char[pwd.length()];
+        pwd.getChars(0, res.length, res, 0);
+        return res;
+    }
+
+    /**
+     * Offered only when opening an existing container.
+     *
+     * Not while creating one: isPasswordVerificationRequired() is the create path, and there
+     * is nothing hidden inside a container that does not exist yet. Not for anything that is
+     * not a container either, because nothing else can hold a second volume.
+     */
+    protected boolean hasHiddenVolumeProtection()
+    {
+        if(!hasPassword() || isPasswordVerificationRequired()
+                || !(_location instanceof ContainerLocation))
+            return false;
+        // Hidden volumes are a property of the container FORMAT, and LUKS has none. Asking
+        // for a second passphrase that cannot mean anything invites the user to type one and
+        // then refuses the mount, which reads as the app being broken. This is not a secret
+        // being leaked by the UI: which formats support hidden volumes is public.
+        for(ContainerFormatInfo cfi: ((ContainerLocation) _location).getSupportedFormats())
+            if(cfi != null && cfi.hasHiddenContainerSupport())
+                return true;
+        return false;
+    }
+
     @Override
     public void onSaveInstanceState(Bundle outState)
     {
@@ -217,11 +277,11 @@ public abstract class PasswordDialogBase extends RxDialogFragment
 
     protected static final int REQUEST_OPTIONS = 1;
     protected TextView _labelTextView;
-    protected EditSB _passwordEditText,_repeatPasswordEditText;
+    protected EditSB _passwordEditText,_repeatPasswordEditText,_protectionPasswordEditText;
     protected Openable _location;
     protected Bundle _options;
 
-    protected SecureBuffer _passwordResult, _repeatPasswordSB;
+    protected SecureBuffer _passwordResult, _repeatPasswordSB, _protectionPasswordSB;
 
     protected void setWidthHeight()
     {

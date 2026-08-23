@@ -226,6 +226,40 @@ would have reported this leak absent, because none of it was on the Java heap. A
 first two runs were read as host memory pressure, which was a real condition at the time
 (15 GB box, 4 GB available, six concurrent sessions) and had nothing to do with it.
 
+### The fast path that aborted the process
+
+`LocalEncryptedFileXTS` is the fast IO path: when the container is a plain local
+file and the cipher mode is XTS, reads and writes go through `liblocalxts.so`
+instead of the Java stack. Its `initContext` opened the container with
+
+```c
+int fd = open(path, readOnly ? O_RDONLY : (O_RDWR | O_CREAT));
+```
+
+`O_CREAT` with no mode argument. On any bionic built with `_FORTIFY_SOURCE`,
+which is every current Android, `__open_2` does not return an error for that: it
+calls `__fortify_fatal` and the process takes `SIGABRT`.
+
+```
+Fatal signal 6 (SIGABRT), code -1 (SI_QUEUE) in tid 13921 (roidJUnitRunner), pid 13902 (site.fysh.fds)
+Abort message: 'FORTIFY: open: called with O_CREAT/O_TMPFILE but no mode'
+  #03 pc 0000000000000d7e  liblocalxts.so (Java_com_sovworks_eds_crypto_LocalEncryptedFileXTS_initContext+78)
+```
+
+So every read-write open of a local container through the fast path killed the
+app outright. It survived because the read-only branch is fine and nothing in the
+existing suite opened a local container for writing; it surfaced the first time
+`OuterVolumeProtectionTest` did, as an empty `<failure>` element and
+`Process crashed`, which is the same shape the low-memory kill above wore.
+
+Adding a mode would have been the wrong fix. `O_CREAT` itself does not belong
+here: this call opens an existing container in order to decrypt it, and creating
+an empty file when the path is missing produces a zero-length container whose
+header cannot be read, turning "that file is gone" into "your container is
+corrupt". The flag is gone. The same edit released the `GetStringUTFChars` copy
+of the path on the success path, which every early return already released and
+which therefore leaked on every successful open.
+
 ### Hidden volumes
 
 Unlocked, and checked against a two-volume container built by desktop VeraCrypt
@@ -238,11 +272,40 @@ carries its own data-area offset. A container with no hidden volume holds random
 bytes in that slot, which fail the header CRC exactly as a wrong passphrase does,
 which is the property the whole feature depends on.
 
-**Writing to the outer volume of a container that has a hidden volume will
-destroy the hidden one.** VeraCrypt guards against this with outer-volume
-protection, which FDS does not implement yet. Until it does, mount the outer
-volume read-only or not at all. Creating hidden volumes is also not implemented:
-use desktop VeraCrypt for that.
+### Outer-volume protection
+
+Writing to the outer volume of a container that has a hidden volume destroys the
+hidden one. That is not a corner case: the outer filesystem cannot see the hidden
+volume by construction, so its allocator writes straight through it the first
+time you copy a file in. FDS implements VeraCrypt's answer to this, and the
+passphrase field on the unlock dialog is where you turn it on.
+
+Give the hidden volume's passphrase in the second field and the outer volume
+mounts read-write with the hidden volume's extent fenced off. Three choices in it
+are worth stating, because each one is a place the feature could leak:
+
+- **Reads are never refused.** A refused read would be a distinguisher: a region
+  the outer filesystem believes is free would behave differently from the rest of
+  the free space, which is exactly the observation the hidden volume exists to
+  deny.
+- **A refusal latches.** Once one write has been turned away the whole outer
+  volume goes read-only for that session. A filesystem that has had a write
+  refused mid-operation no longer agrees with its own metadata, and letting the
+  next write through would corrupt it for real.
+- **A wrong protection passphrase refuses the mount** rather than mounting
+  unprotected. "The passphrase is wrong" and "this container has no hidden
+  volume" are indistinguishable by design, and neither is safe to write to.
+
+The protection passphrase is asked for every time and stored nowhere, not even in
+a saved location. A persisted "this container has a hidden volume" flag would
+itself be the proof, readable by whoever is holding the phone. For the same
+reason the field is offered on every container whose format supports hidden
+volumes, whether or not one is there.
+
+Known gap: a location with a saved password skips the unlock dialog, so there is
+currently no way to enter a protection passphrase for one.
+
+Creating hidden volumes is still not implemented: use desktop VeraCrypt for that.
 
 ### Keyfiles
 
@@ -342,8 +405,10 @@ wipe instead of unlinking.
 - **M3 unlock the gated features** - hidden volumes done, VeraCrypt passphrase
   cap raised from TrueCrypt's 64 to VeraCrypt's 128, and the format/cipher/hash
   of a successful open are now remembered instead of being left buried in a
-  long-press menu. Outstanding: outer-volume protection, hidden volume creation,
-  keyfiles (has to be written from scratch)
+  long-press menu. Outer-volume protection is done, core and UI, with a
+  destructive control test proving the unprotected write really does destroy the
+  hidden volume. Outstanding: hidden volume creation, keyfiles (has to be written
+  from scratch)
 - **M4 hardening** - `allowBackup=false`, `FLAG_SECURE` on by default, both
   automatic locks, the key-zeroing pass and the wipe fix are done. The zeroing
   pass covered the three paths that leaked key material on the failure branch:
@@ -377,6 +442,8 @@ the crypto can only be exercised on a real ABI.
 | `UnsupportedMatrixTest` | the FULL negative matrix, all 41 | desktop VeraCrypt 1.26 |
 | `HardeningTest` | both automatic locks default on and can be turned off; the wipe preserves the file length and covers the partial last block; the wipe still deletes | the filesystem itself, and a known-bad build of each arm |
 | `HmacNativeMemoryTest` | the PBKDF2 inner loop does not grow the native heap, with `javax.crypto.Mac` in the same run as the positive control that proves the measurement can see a leak | `/proc/self/status` VmRSS |
+| `HiddenVolumeProtectionTest` | every write that touches the protected extent is refused and every write that misses it goes through, both write paths, the refusal latches, a truncation below the hidden volume is refused, an empty protected range is rejected, and reads are never refused | an in-memory IO the test reads back byte for byte |
+| `OuterVolumeProtectionTest` | a write aimed at the hidden volume is refused and the hidden volume still opens with its original contents; the SAME write with no protection destroys it; a wrong protection passphrase refuses the mount | desktop VeraCrypt 1.26, and the unprotected control |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific
@@ -394,6 +461,12 @@ builds:
 
 The two wipe arms fail against different builds and pass against each other's,
 which is the point: they are two assertions, not one test written twice.
+
+`OuterVolumeProtectionTest` carries its own known-bad rather than needing a
+reverted build for one. `theSameWriteWithoutProtectionDestroysTheHiddenVolume`
+performs the identical write on an identical copy with the wrapper absent, and
+requires the hidden volume to come back damaged. Without it, the protected arm
+would pass just as happily if the write had been harmless all along.
 
 `UnsupportedMatrixTest` is `@LargeTest` and the runner excludes it unless you
 name it, because every fixture in it pays the whole hash sweep twice. The

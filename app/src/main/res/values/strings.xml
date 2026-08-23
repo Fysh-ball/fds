@@ -139,6 +139,9 @@
 	<string name="change_container_password">Change container password</string>
 	<string name="enter_new_password">Enter new password</string>
 	<string name="repeat_password">Repeat password</string>
+	<!-- Shown only when opening an existing container. Blank means no protection. -->
+	<string name="hidden_volume_protection_password">Hidden volume passphrase (optional)</string>
+	<string name="hidden_volume_protection_failed">The hidden volume passphrase did not open a hidden volume, so this container was not opened. Leave the field blank to open without protection.</string>
 	<string name="password_does_not_match">Password does not match</string>
 	<string name="save_password">Remember password</string>
 	<string name="save_password_desc">Save the password of the container. Saving a password may be insecure.</string>
