@@ -8,10 +8,22 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
 
+    <!--
+        allowBackup is false and stays false. Upstream had it true with a backup scheme that
+        included res/xml/backupscheme.xml's "com.sovworks.eds.PREFERENCES", which is where the
+        container list, the last-opened paths and the per-container settings live. On a device
+        with cloud backup on, that is the app's own record of which containers exist leaving
+        the device: the exact trace the coerced-disclosure half of the threat model exists to
+        avoid, and it would leave to whichever OEM cloud the user did not choose. The container
+        FILES are not in it, but the knowledge that they are containers is.
+
+        backupscheme.xml is left in the tree rather than deleted because a future opt-in backup
+        of genuinely non-sensitive settings would need to start from a scheme; with
+        allowBackup false the platform ignores it.
+    -->
     <application
         android:name="com.sovworks.eds.android.EdsApplication"
-        android:allowBackup="true"
-        android:fullBackupContent="@xml/backupscheme"
+        android:allowBackup="false"
         android:icon="@drawable/ic_launcher_eds"
         android:label="@string/eds"
         android:theme="@style/Theme.EDS">

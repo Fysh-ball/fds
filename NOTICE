@@ -31,16 +31,35 @@ EDS Lite's source has not been touched since 2020-04-21. Its successor, EDS NG,
 is closed source and paywalls the features that matter most for the threat model
 this fork targets: hidden volumes, keyfiles, and container-wide search.
 
-Those features are not missing from the open source engine, only disabled in it.
-The container layer already carries hidden-volume plumbing throughout
-(EdsContainerBase.tryLayout(..., isHidden), ContainerFormatInfo.getHiddenVolumeLayout(),
-and StdLayout reserving four header slots including the hidden volume header).
-What the lite build does is override a handful of methods to answer "no":
+Those features are not all in the same state, and the difference decides how much work
+each one is. Measured by enumerating every reference in app/src, not inferred from the
+method names:
 
-  app/src/lite/java/com/sovworks/eds/truecrypt/FormatInfo.java
-    hasHiddenContainerSupport() -> false
-    hasKeyfilesSupport()        -> false
-    getHiddenVolumeLayout()     -> null
-    getMaxPasswordLength()      -> 64
+HIDDEN VOLUMES are present and switched off. The container layer carries the plumbing
+throughout: EdsContainerBase.tryLayout(..., isHidden) at line 226 branches on it,
+line 253 refuses the hidden pass with `if(isHidden && !cf.hasHiddenContainerSupport())`,
+getLayouts(boolean isHidden) selects the layout, and truecrypt/StdLayout reserves four
+header slots (RESERVED_HEADER_SIZE = 4*HEADER_SIZE) of which two are the hidden header
+and its backup. StdLayout.decodeHeader already reads the data-area start from header
+offset 108 and the volume size from 116, so a layout pointed at the hidden header opens
+the hidden volume with no change to the crypto path. What the lite build did was answer
+"no" in two methods of app/src/lite/java/com/sovworks/eds/truecrypt/FormatInfo.java,
+hasHiddenContainerSupport() and getHiddenVolumeLayout(). FDS answers yes and supplies
+truecrypt/HiddenLayout and veracrypt/HiddenVolumeLayout, each of which overrides exactly
+two offset methods. Opening only: creating a hidden volume needs the outer volume's free
+space and outer-volume write protection, neither of which exists yet.
 
-FDS keeps the engine and removes the paywall.
+KEYFILES are absent, not disabled, and saying otherwise would overstate what this fork
+inherits. The whole tree contains three references to the feature and none of them is an
+implementation: the interface declaration in container/ContainerFormatInfo.java, the lite
+override, and luks/FormatInfoBase.java. There is no keyfile pool, no CRC32 mixer, no UI.
+hasKeyfilesSupport() -> false is an honest answer here. FDS has to write the feature.
+
+MAXIMUM PASSPHRASE LENGTH was a plain constant, getMaxPasswordLength() -> 64, inherited by
+veracrypt/FormatInfo without an override. TrueCrypt's format limit really is 64 bytes, so
+that answer was right for TrueCrypt and wrong for VeraCrypt, whose limit is 128.
+EdsContainerBase.cutPassword truncates silently, and a truncated passphrase derives a
+different key, so a 90-character VeraCrypt passphrase failed to open its own container with
+nothing to say why. veracrypt/FormatInfo now answers 128.
+
+FDS keeps the engine, removes the paywall, and writes what was never there.

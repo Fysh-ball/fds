@@ -31,12 +31,20 @@ public class FormatInfo implements ContainerFormatInfo
 	@Override
 	public boolean hasHiddenContainerSupport()
 	{
-		return false;
+		// Unpaywalled. EdsContainerBase.tryLayout consults this before it will even try the
+		// hidden header, and nothing on the container CREATION path reads it, so turning it on
+		// widens what can be opened and cannot produce a malformed container. The cost is that
+		// a failed unlock now also scans the hidden header slot, which is what VeraCrypt itself
+		// does and is the reason a hidden volume is deniable in the first place.
+		return true;
 	}
 	
 	@Override
 	public boolean hasKeyfilesSupport()
 	{
+		// Still false, and not because of the paywall: there is no keyfile implementation
+		// anywhere in this tree to switch on. See NOTICE. Returning true here would only make
+		// the app offer a keyfile field that nothing reads.
 		return false;
 	}
 
@@ -49,13 +57,15 @@ public class FormatInfo implements ContainerFormatInfo
 	@Override
 	public int getMaxPasswordLength()
 	{
+		// The TrueCrypt format's real limit, not a paywall. VeraCrypt raised it and overrides
+		// this.
 		return 64;
 	}
 
 	@Override
 	public VolumeLayout getHiddenVolumeLayout()
 	{
-		return null;
+		return new HiddenLayout();
 	}
 	
 	@Override

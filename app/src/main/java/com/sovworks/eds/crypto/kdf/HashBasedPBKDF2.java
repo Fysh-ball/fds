@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 
 import java.security.MessageDigest;
 
+import com.sovworks.eds.android.Logger;
 import com.sovworks.eds.crypto.EncryptionEngineException;
 
 @SuppressLint("DefaultLocale")
@@ -24,6 +25,21 @@ public class HashBasedPBKDF2 extends PBKDF
 	protected HMAC initHMAC(byte[] password) throws EncryptionEngineException
 	{
 		_md.reset();
+		String macName = MacHMAC.macNameFor(_md);
+		if(macName != null && password.length > 0)
+		{
+			try
+			{
+				return new MacHMAC(password, _md, _blockSize, macName);
+			}
+			catch(EncryptionEngineException e)
+			{
+				// A missing or disagreeing provider must not make the container unopenable,
+				// only slower, so fall back. It is logged because a silent fallback would
+				// turn a 4-second unlock into a 25-second one with nothing to point at.
+				Logger.log("MacHMAC unavailable for " + macName + ", using the generic HMAC: " + e.getMessage());
+			}
+		}
 		return new HMAC(password, _md, _blockSize);
 	}
 	

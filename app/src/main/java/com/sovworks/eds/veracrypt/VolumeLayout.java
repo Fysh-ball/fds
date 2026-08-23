@@ -31,10 +31,15 @@ public class VolumeLayout extends StdLayout
 	@Override
 	public List<MessageDigest> getSupportedHashFuncs()
 	{
+		// VeraCrypt added SHA-256; TrueCrypt never had it. Inserted after SHA-512 rather than
+		// appended, for the same cost reason StdLayout orders its own list: SHA-256 is a
+		// platform hash and is cheaper than either of the two this app carries JNI code for,
+		// so a SHA-256 container should not pay for whirlpool and ripemd160 attempts first.
 		List<MessageDigest> l = super.getSupportedHashFuncs();
 		try
 		{
-			l.add(MessageDigest.getInstance("SHA256"));
+			MessageDigest sha256 = MessageDigest.getInstance("SHA256");
+			l.add(l.isEmpty() ? 0 : 1, sha256);
 		}
 		catch (NoSuchAlgorithmException ignored)
 		{

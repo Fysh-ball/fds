@@ -169,10 +169,23 @@ public class DefaultSettingsCommon implements SettingsCommon
 		return Settings.VERSION;
 	}
 
+	/**
+	 * Upstream defaulted this to false, so out of the box the recents thumbnail and any
+	 * screenshot showed the decrypted file listing: names, sizes, the lot. That is the
+	 * casual-snooping case answered by the platform for free, and it was switched off.
+	 *
+	 * It is a DEFAULT, not a lock. The preference still exists and a user who wants
+	 * screenshots or screen mirroring can turn it off in settings; anyone who already set it
+	 * keeps what they set, because the read goes through getBoolean(key, thisValue).
+	 *
+	 * The cost is real and worth stating: FLAG_SECURE also blanks the window for adb
+	 * screencap, so a screenshot taken during testing comes back black. The accessibility
+	 * tree still dumps, which is what UI verification should be reading anyway.
+	 */
 	@Override
 	public boolean isFlagSecureEnabled()
 	{
-		return false;
+		return true;
 	}
 
 	@Override

@@ -112,6 +112,12 @@ public class StdLayout extends VolumeLayoutBase
 	@Override
     public List<MessageDigest> getSupportedHashFuncs()
     {
+		// Cheapest first, and ripemd160 last on purpose. A wrong hash cannot pass the header
+		// CRC, so this order is a pure cost decision, and it is not a small one: opening a
+		// container is a linear scan of this list, and at VeraCrypt's iteration counts one
+		// ripemd160 pass measured 5 minutes on the x86_64 emulator against 24 seconds for
+		// SHA-512. Trying it second made every whirlpool container pay that 5 minutes before
+		// reaching the hash it was actually made with.
     	ArrayList<MessageDigest> l = new ArrayList<>();
 		try
 		{
@@ -120,8 +126,8 @@ public class StdLayout extends VolumeLayoutBase
 		catch (NoSuchAlgorithmException ignored)
 		{
 		}
-		l.add(new RIPEMD160());
 		l.add(new Whirlpool());
+		l.add(new RIPEMD160());
 		return l;
     }
 	

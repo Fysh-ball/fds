@@ -24,6 +24,23 @@ cmake_minimum_required(VERSION 3.22)
 
 project(fds_native C)
 
+# Optimise the crypto even in the debug variant.
+#
+# AGP builds the debug variant with CMAKE_BUILD_TYPE=Debug, and the NDK toolchain's Debug
+# config passes no -O flag at all (verified in app/.cxx/Debug/*/x86_64/build.ninja: the FLAGS
+# line has -g and -fno-limit-debug-info and no -O), which means clang's default of -O0. The
+# instrumented suite is a debug build. That is not "the same app, a bit slower": PBKDF2 runs
+# the hash 500000 times per unlock, so at -O0 one ripemd160 derivation measured five minutes
+# on the x86_64 emulator against seconds for the platform's own SHA-512. Every timing number
+# taken from a debug build is a number about -O0 and not about this app.
+#
+# Appended to CMAKE_C_FLAGS_DEBUG rather than set in gradle's cFlags, because gradle's flags
+# land in CMAKE_C_FLAGS which the per-config flags follow: written there it would be the first
+# -O on the line rather than the last, and clang takes the last -O it is given. -g and the
+# debug symbols are left alone: this trades stepping through crypto internals, which nothing
+# here does, for measurements that mean something.
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O2")
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
