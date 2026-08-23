@@ -1,0 +1,16 @@
+/build
+/app/build
+/.gradle
+.gradle/
+local.properties
+/captures
+.externalNativeBuild/
+.cxx/
+*.iml
+.idea/
+
+# Keystores are never committed - with one exception: misc/keys.keystore is the
+# upstream debug key (password 'android'), already tracked, and stays tracked.
+*.keystore
+!misc/keys.keystore
+*.jks

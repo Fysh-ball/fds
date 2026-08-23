@@ -1,151 +1,203 @@
-apply plugin: 'com.android.application'
+plugins {
+    id 'com.android.application'
+}
+
+// Release signing is read from local.properties (untracked). If the keys are absent the
+// release variant is simply left unsigned. No release credential is ever hardcoded here.
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+def hasReleaseSigning = localProps.getProperty('fds.release.storeFile') != null
 
 android {
+    // CRITICAL: namespace must stay equal to the existing java package so the generated
+    // R / BuildConfig classes keep resolving. Do not "modernise" this to the applicationId.
+    namespace 'com.sovworks.eds.android'
 
-    compileSdkVersion 28
+    compileSdk 35
+    ndkVersion '28.2.13676358'
 
     defaultConfig {
-        applicationId "com.sovworks.eds.android"
-        minSdkVersion 14
-        targetSdkVersion 28
+        applicationId 'site.fysh.fds'
+
+        // Raised from upstream's 14: AGP 8 + androidx require 21+, and Android 7.0 is the
+        // right floor for a security app (real SELinux, TLS 1.2 by default, no MD5 certs).
+        minSdk 24
+
+        // DELIBERATELY HELD AT 28 for this milestone. Do NOT raise it.
+        // targetSdk 29+ turns on scoped storage, which would break every file-access path in
+        // this app at once and make the androidx migration impossible to diagnose. Scoped
+        // storage is its own separate milestone.
+        targetSdk 28
+
+        // Upstream numbering, kept so nothing downstream is surprised.
+        // FDS renumbers at its first release.
         versionCode 237
-        versionName "2.0.0.237"
+        versionName '2.0.0.237'
+
+        // Now unnecessary at minSdk 24 (native multidex since API 21), kept only because
+        // removing it is a behaviour change nobody has measured yet.
         multiDexEnabled true
 
-
         ndk {
-            // Specifies the ABI configurations of your native
-            // libraries Gradle should build and package with your APK.
-            abiFilters 'x86', 'x86_64', 'armeabi-v7a', 'arm64-v8a'
+            // All four upstream ABIs are kept. Every cipher and hash in this app is JNI-only
+            // with no Java fallback, so an ABI missing from here ships an APK that cannot
+            // decrypt anything at all. The device population decides this list, not whichever
+            // emulator image happens to be installed on a build host.
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
         }
 
-        testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
-	signingConfigs {
+    // The upstream flavour scaffolding (flavorDimensions "fullOrLite"/"licCheckType"/"inet"/
+    // "fsm", four productFlavors and a variantFilter) is GONE. It declared exactly one flavour
+    // per dimension and filtered against a "full" flavour whose source set was never published,
+    // so it produced a single variant while pretending to produce a matrix.
+    //
+    // src/main and src/lite hold DISJOINT java FQNs (verified: zero overlap) - lite is
+    // complementary to main, not an override layer - so both are wired into one source set.
+    sourceSets {
+        main {
+            // Load-bearing: src/lite/java still holds 75 java files that src/main does not.
+            java.srcDirs += 'src/lite/java'
+            // Defensive no-op as of now - src/lite/res has already been merged into
+            // src/main/res by hand. A missing srcDir is silently ignored by AGP, so this
+            // keeps the build working whichever way the merge lands. Delete once settled.
+            res.srcDirs += 'src/lite/res'
+            // src/lite/AndroidManifest.xml is deliberately NOT wired: a source set takes
+            // exactly one manifest, so the lite manifest has to be merged into
+            // src/main/AndroidManifest.xml by hand (done).
+        }
+    }
+
+    signingConfigs {
+        // Upstream debug key, committed at misc/keys.keystore with password 'android'.
+        // Debug only. Never used for release.
         debug {
             storeFile file('../misc/keys.keystore')
             storePassword 'android'
             keyAlias 'eds-debug-key'
             keyPassword 'android'
         }
-    }    
 
-    flavorDimensions "fullOrLite", "licCheckType", "inet", "fsm"
-
-    productFlavors {
-        
-        lite {
-            dimension "fullOrLite"
-            applicationId "com.sovworks.edslite"
-            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules-lite.pro'
-            externalNativeBuild {
-                cmake {
-                    targets "edsxts", "edsctr", "edsaes", "edsserpent", "edstwofish", "edsripemd160", "edswhirlpool", "fdraio", "localxts", "edscfb", "edscbc", "edsctr", "edsgost"
-                }
+        if (hasReleaseSigning) {
+            release {
+                storeFile file(localProps.getProperty('fds.release.storeFile'))
+                storePassword localProps.getProperty('fds.release.storePassword')
+                keyAlias localProps.getProperty('fds.release.keyAlias')
+                keyPassword localProps.getProperty('fds.release.keyPassword')
             }
-        }
-        licCheckNone {
-            dimension "licCheckType"
-        }
-        noinet {
-            dimension "inet"
-        }
-        nofsml {
-            dimension "fsm"
-        }
-    }
-
-    variantFilter { variant ->
-        def names = variant.flavors*.name
-        if ((names.contains("lite") && !names.contains("licCheckNone")) ||
-                (names.contains("full") && names.contains("licCheckNone")) ||
-                (names.contains("inet") && !names.contains("full")) ||
-                (names.contains("fsm") && !names.contains("full")) ||
-                (names.contains("nofsm") && !names.contains("full")) ||
-                (names.contains("fsm") && !names.contains("inet")) ||
-                (names.contains("fsm") && !names.contains("licCheckGP")) ||
-                (names.contains("nofsml") && !names.contains("lite"))
-
-        ) {
-            setIgnore(true)
         }
     }
 
     buildTypes {
-        
         debug {
             signingConfig signingConfigs.debug
-            externalNativeBuild {
-
-                cmake {
-                    cFlags "-DDEBUG"
-                }
-            }
             debuggable true
             jniDebuggable true
+            externalNativeBuild {
+                cmake {
+                    cFlags '-DDEBUG'
+                }
+            }
         }
-    }
 
-    packagingOptions {
-        exclude 'META-INF/LICENSE.txt'
-        exclude 'META-INF/LICENSE'
-        exclude 'META-INF/NOTICE.txt'
-        exclude 'META-INF/NOTICE'
-    }
-
-    lintOptions {
-          //checkReleaseBuilds false
-          abortOnError false
-    }
-
-    applicationVariants.all { variant ->
-        variant.outputs.all {
-            outputFileName = outputFileName.replace("app-", "EDS-").replace(".apk", "-v${variant.versionName}.apk")
+        release {
+            // minify stays OFF: this app is JNI-heavy with reflection-reached classes and
+            // shrinking has never been exercised on it. The rules file is wired so turning
+            // it on later is a one-line change.
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig hasReleaseSigning ? signingConfigs.release : null
         }
     }
 
     externalNativeBuild {
-
         cmake {
-           path "CMakeLists.txt"
+            path 'CMakeLists.txt'
+            version '3.22.1'
         }
+    }
+    // No `targets` list: upstream pinned 13 target names inside the lite flavour. The
+    // CMakeLists is being ported by another agent, so building ALL targets it defines is
+    // the only option that cannot go stale.
+
+    buildFeatures {
+        // AGP 8 defaults buildConfig to off; this codebase reads BuildConfig.
+        buildConfig true
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            excludes += ['META-INF/LICENSE.txt', 'META-INF/LICENSE', 'META-INF/NOTICE.txt', 'META-INF/NOTICE']
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all {
+            outputFileName = outputFileName.replace('app-', 'FDS-').replace('.apk', "-v${variant.versionName}.apk")
+        }
+    }
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
     }
 }
 
 dependencies {
-    implementation 'com.drewnoakes:metadata-extractor:2.12.0'
-    implementation 'com.android.support:design:28.0.0'
-    implementation 'io.reactivex.rxjava2:rxandroid:2.1.0'
-    implementation 'io.reactivex.rxjava2:rxjava:2.2.1'
+    // androidx replacements for com.android.support:*
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.fragment:fragment:1.8.6'
+    implementation 'androidx.preference:preference:1.2.1'
+    implementation 'androidx.recyclerview:recyclerview:1.3.2'
+    implementation 'androidx.legacy:legacy-support-v4:1.0.0'
+    implementation 'androidx.multidex:multidex:2.0.1'
 
-    implementation 'com.trello.rxlifecycle2:rxlifecycle:2.2.2'
-    // If you want to bind to Android-specific lifecycles
-    implementation 'com.trello.rxlifecycle2:rxlifecycle-android:2.2.2'
-    // If you want pre-written Activities and Fragments you can subclass as providers
-    implementation 'com.trello.rxlifecycle2:rxlifecycle-components:2.2.2'
-    implementation 'com.android.support:exifinterface:28.0.0'
-}
+    // Declared explicitly rather than inherited from appcompat/legacy-support-v4: the source
+    // imports these types directly, so the build must not be hostage to another POM's graph.
+    implementation 'androidx.annotation:annotation:1.8.2'
+    implementation 'androidx.drawerlayout:drawerlayout:1.2.0'
+    implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
 
+    // com.android.support:design:28.0.0     ->
+    implementation 'com.google.android.material:material:1.12.0'
+    // com.android.support:exifinterface:28.0.0 ->
+    implementation 'androidx.exifinterface:exifinterface:1.3.7'
 
-apply from: 'build-full.gradle'
+    implementation 'com.drewnoakes:metadata-extractor:2.19.0'
 
-if (file('build-local').exists()) {
-	apply from: 'build-local.gradle'
-}
+    implementation 'io.reactivex.rxjava2:rxjava:2.2.21'
+    implementation 'io.reactivex.rxjava2:rxandroid:2.1.1'
 
-configurations.all {
-    resolutionStrategy.eachDependency { DependencyResolveDetails details ->
-        def requested = details.requested
-        if (requested.group == "com.android.support") {
-            if (!requested.name.startsWith("multidex")) {
-                details.useVersion "26.+"
-            }
-        }
-    }
+    // rxlifecycle2 2.2.2 is built against com.android.support and only ever shipped to the
+    // dead jcenter. rxlifecycle3 3.1.0 is the same library on androidx, still RxJava2, and is
+    // on mavenCentral. Package renames com.trello.rxlifecycle2 -> com.trello.rxlifecycle3.
+    implementation 'com.trello.rxlifecycle3:rxlifecycle:3.1.0'
+    implementation 'com.trello.rxlifecycle3:rxlifecycle-android:3.1.0'
+    implementation 'com.trello.rxlifecycle3:rxlifecycle-components:3.1.0'
+
+    // The testInstrumentationRunner above named a class that nothing supplied, so
+    // connectedAndroidTest would have died with ClassNotFoundException rather than run.
+    // M1 puts the container round-trip tests here: the ciphers are JNI-only, so they can
+    // only be exercised on a real ABI, not on the JVM.
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:rules:1.6.1'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    testImplementation 'junit:junit:4.13.2'
 }

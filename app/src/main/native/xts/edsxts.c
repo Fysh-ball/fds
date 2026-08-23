@@ -34,6 +34,8 @@ Part of this code is based on Brian Gladman's xts implementation.
 
 #include "com_sovworks_eds_crypto_modes_XTS.h"
 #include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
 #include <android/log.h>
 #include "xts.h"
 

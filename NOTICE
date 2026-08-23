@@ -1,0 +1,46 @@
+# FDS - Fysh Derived Security
+
+FDS is a fork of EDS Lite by Sovworks.
+
+  Upstream:  https://github.com/sovworks/edslite
+  Forked at: 8a0c0d3 "Updated source code to v2.0.0.237 (bug fixing)", 2020-04-21
+  Upstream licence: GPL-2.0-or-later ("GPLv2+", per upstream README.MD)
+
+Upstream's "or any later version" grant permits distributing this derivative work
+under GPL-3.0, which is what FDS does. The original GPL-2.0 text is preserved in
+LICENSE.upstream-GPL-2.0 for provenance; LICENSE is the GPL-3.0 text that governs
+this fork.
+
+Note that the grant reaches later versions of *the GPL* only. AGPL-3.0 is a
+separate licence, not a later version of the GPL, so FDS cannot be relicensed to
+AGPL-3.0 even though the rest of the Fysh estate is AGPL-3.0. GPLv3 section 13
+permits combining GPL-3.0 and AGPL-3.0 code, but that is linking, not
+relicensing.
+
+## Trademarks
+
+VeraCrypt is a trademark of IDRIX. TrueCrypt is a trademark of the TrueCrypt
+Foundation. FDS is not affiliated with, endorsed by, or derived from either
+project's own codebase; it reads and writes their published on-disk container
+formats. Describe it as "compatible with VeraCrypt containers", never as
+VeraCrypt.
+
+## Why this fork exists
+
+EDS Lite's source has not been touched since 2020-04-21. Its successor, EDS NG,
+is closed source and paywalls the features that matter most for the threat model
+this fork targets: hidden volumes, keyfiles, and container-wide search.
+
+Those features are not missing from the open source engine, only disabled in it.
+The container layer already carries hidden-volume plumbing throughout
+(EdsContainerBase.tryLayout(..., isHidden), ContainerFormatInfo.getHiddenVolumeLayout(),
+and StdLayout reserving four header slots including the hidden volume header).
+What the lite build does is override a handful of methods to answer "no":
+
+  app/src/lite/java/com/sovworks/eds/truecrypt/FormatInfo.java
+    hasHiddenContainerSupport() -> false
+    hasKeyfilesSupport()        -> false
+    getHiddenVolumeLayout()     -> null
+    getMaxPasswordLength()      -> 64
+
+FDS keeps the engine and removes the paywall.

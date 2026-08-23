@@ -37,14 +37,16 @@
     public void writeExternal(java.io.ObjectOutput);
 }
 
--keep class android.support.** { *; }
+-keep class androidx.** { *; }
+-keep class com.google.android.material.** { *; }
 
 -keep class org.apache.** { *; }
 
 -dontwarn org.apache.**
 -dontwarn javax.servlet.**
 
--dontwarn android.support.**
--dontnote android.support.**
+-dontwarn androidx.**
+-dontnote androidx.**
+-dontwarn com.google.android.material.**
 
 -dontwarn java.awt.*

@@ -1,21 +1,9 @@
-// Top-level build file where you can add configuration options common to all sub-projects/modules.
+// Top-level build file.
+//
+// The upstream buildscript{} block (AGP 3.3.2, jcenter()) is gone. Plugins are declared
+// here with the plugins {} DSL and resolved through pluginManagement in settings.gradle;
+// repositories for dependencies live in settings.gradle dependencyResolutionManagement.
 
-buildscript {
-    repositories {
-        jcenter()
-        google()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:3.3.2'
-
-        // NOTE: Do not place your application dependencies here; they belong
-        // in the individual module build.gradle files
-    }
-}
-
-allprojects {
-    repositories {
-        google()
-        jcenter()
-    }
+plugins {
+    id 'com.android.application' version '8.13.2' apply false
 }

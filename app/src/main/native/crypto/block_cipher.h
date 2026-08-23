@@ -1,6 +1,8 @@
 #ifndef BLOCK_CIPHER_H
 #define BLOCK_CIPHER_H
 
+#include <stdint.h>
+
 typedef int (*block_func)(const uint8_t *in, uint8_t *out, void *context);
 #define block_encryptor block_func
 #define block_decryptor block_func
