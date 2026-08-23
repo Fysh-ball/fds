@@ -3,6 +3,7 @@ package com.sovworks.eds.fdstest;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -59,67 +60,21 @@ public class OuterVolumeProtectionTest
     /** One FAT cluster's worth, aligned to the 512-byte XTS sector. */
     private static final int WRITE_LEN = 4096;
 
-    private static File sFixture;
+    private static HiddenFixture sHidden;
     private static File sScratchDir;
-    private static String sOuterPw;
-    private static String sHiddenPw;
-    private static Map<String, String> sHiddenExpected;
 
     @BeforeClass
     public static void loadFixture() throws Exception
     {
         Context ctx = InstrumentationRegistry.getInstrumentation().getTargetContext();
-        File dir = FixtureSet.locate(ctx);
-        if (dir == null)
-            throw new IOException("no external files dir on this device");
-        sFixture = new File(dir, "hidden_AES_SHA_512.hc");
+        sHidden = HiddenFixture.load(ctx);
         sScratchDir = new File(ctx.getCacheDir(), "protection");
-        if (!sScratchDir.isDirectory() && !sScratchDir.mkdirs())
-            throw new IOException("cannot create " + sScratchDir);
-
-        File manifest = new File(dir, "hidden-manifest.tsv");
-        if (!manifest.isFile())
-            throw new IOException("hidden fixture manifest missing: " + manifest.getAbsolutePath()
-                    + " (run tools/mkhiddenfixture.sh then tools/run-fixture-tests.sh)"
-                    + FixtureSet.describePath(manifest));
-
-        Map<String, String> hidden = new LinkedHashMap<>();
-        BufferedReader r = new BufferedReader(new InputStreamReader(new FileInputStream(manifest), UTF8));
-        try
-        {
-            String line;
-            boolean header = true;
-            while ((line = r.readLine()) != null)
-            {
-                if (header) { header = false; continue; }
-                if (line.trim().isEmpty()) continue;
-                String[] f = line.split("\t", -1);
-                if (f.length != 4)
-                    throw new IOException("hidden-manifest.tsv needs 4 columns: " + line);
-                if ("outer".equals(f[0]))
-                    sOuterPw = f[1];
-                else if ("hidden".equals(f[0]))
-                {
-                    sHiddenPw = f[1];
-                    hidden.put(f[2], f[3]);
-                }
-            }
-        }
-        finally
-        {
-            r.close();
-        }
-        sHiddenExpected = hidden;
     }
 
     @Before
     public void requireTheFixture()
     {
-        assertTrue("hidden fixture container missing: " + sFixture, sFixture.isFile());
-        assertTrue("no outer passphrase in the manifest", sOuterPw != null && !sOuterPw.isEmpty());
-        assertTrue("no hidden passphrase in the manifest", sHiddenPw != null && !sHiddenPw.isEmpty());
-        assertFalse("the manifest lists no files for the hidden volume, so 'the hidden volume "
-                + "survived' would be true of an empty volume too", sHiddenExpected.isEmpty());
+        assertNull(sHidden.whatIsMissing(), sHidden.whatIsMissing());
     }
 
     /**
@@ -129,9 +84,9 @@ public class OuterVolumeProtectionTest
     @Test
     public void aWriteAimedAtTheHiddenVolumeIsRefusedAndTheHiddenVolumeSurvives() throws Exception
     {
-        File scratch = copyFixture("protected");
+        File scratch = sHidden.copy(sScratchDir, "protected");
         long protectedStart;
-        EdsContainer c = openOuter(scratch, sHiddenPw.getBytes(UTF8));
+        EdsContainer c = openOuter(scratch, sHidden.hiddenPassphrase.getBytes(UTF8));
         try
         {
             RandomAccessIO io = c.getEncryptedFile(false);
@@ -175,8 +130,8 @@ public class OuterVolumeProtectionTest
         }
 
         assertEquals("the hidden volume changed even though the write was refused",
-                new TreeMap<>(sHiddenExpected),
-                new TreeMap<>(ContainerPayload.read(scratch, sHiddenPw.getBytes(UTF8))));
+                new TreeMap<>(sHidden.hiddenContents),
+                new TreeMap<>(ContainerPayload.read(scratch, sHidden.hiddenPassphrase.getBytes(UTF8))));
         scratch.delete();
     }
 
@@ -192,8 +147,8 @@ public class OuterVolumeProtectionTest
     {
         // Learn the offset from a protected open, then use it on a second, unprotected copy.
         long protectedStart;
-        File probe = copyFixture("probe");
-        EdsContainer c = openOuter(probe, sHiddenPw.getBytes(UTF8));
+        File probe = sHidden.copy(sScratchDir, "probe");
+        EdsContainer c = openOuter(probe, sHidden.hiddenPassphrase.getBytes(UTF8));
         try
         {
             protectedStart = ((HiddenVolumeProtectingIO) c.getEncryptedFile(false)).getProtectedStart();
@@ -204,7 +159,7 @@ public class OuterVolumeProtectionTest
             probe.delete();
         }
 
-        File scratch = copyFixture("unprotected");
+        File scratch = sHidden.copy(sScratchDir, "unprotected");
         c = openOuter(scratch, null);
         try
         {
@@ -224,7 +179,7 @@ public class OuterVolumeProtectionTest
         Map<String, String> after;
         try
         {
-            after = ContainerPayload.read(scratch, sHiddenPw.getBytes(UTF8));
+            after = ContainerPayload.read(scratch, sHidden.hiddenPassphrase.getBytes(UTF8));
         }
         catch (Throwable damaged)
         {
@@ -237,7 +192,7 @@ public class OuterVolumeProtectionTest
         assertNotEquals("an unprotected " + WRITE_LEN + "-byte write at " + protectedStart
                         + " left the hidden volume byte-identical, so that offset is not "
                         + "inside the hidden volume and the protected test proves nothing",
-                new TreeMap<>(sHiddenExpected), new TreeMap<>(after));
+                new TreeMap<>(sHidden.hiddenContents), new TreeMap<>(after));
         scratch.delete();
     }
 
@@ -251,13 +206,13 @@ public class OuterVolumeProtectionTest
     @Test
     public void aWrongProtectionPassphraseRefusesTheMount() throws Exception
     {
-        File scratch = copyFixture("wrongpw");
+        File scratch = sHidden.copy(sScratchDir, "wrongpw");
         EdsContainer c = new EdsContainer(StdFs.makePath(scratch.getAbsolutePath()));
         try
         {
             c.setContainerFormat(new com.sovworks.eds.veracrypt.FormatInfo());
             c.setHiddenVolumeProtectionPassword("fds-not-the-hidden-passphrase".getBytes(UTF8));
-            c.open(sOuterPw.getBytes(UTF8));
+            c.open(sHidden.outerPassphrase.getBytes(UTF8));
             fail("the container mounted with a protection passphrase that opens no hidden volume");
         }
         catch (HiddenVolumeProtectionFailedException expected)
@@ -280,39 +235,10 @@ public class OuterVolumeProtectionTest
         c.setContainerFormat(new com.sovworks.eds.veracrypt.FormatInfo());
         if (protectionPw != null)
             c.setHiddenVolumeProtectionPassword(protectionPw);
-        c.open(sOuterPw.getBytes(UTF8));
+        c.open(sHidden.outerPassphrase.getBytes(UTF8));
         return c;
     }
 
-    private static File copyFixture(String tag) throws IOException
-    {
-        File out = new File(sScratchDir, tag + "_" + sFixture.getName());
-        InputStream in = new FileInputStream(sFixture);
-        try
-        {
-            OutputStream os = new FileOutputStream(out);
-            try
-            {
-                byte[] buf = new byte[64 * 1024];
-                int n;
-                while ((n = in.read(buf)) > 0)
-                    os.write(buf, 0, n);
-                os.flush();
-            }
-            finally
-            {
-                os.close();
-            }
-        }
-        finally
-        {
-            in.close();
-        }
-        if (out.length() != sFixture.length())
-            throw new IOException("scratch copy is " + out.length() + " bytes, fixture is "
-                    + sFixture.length());
-        return out;
-    }
 
     private static byte[] filled(int n, int v)
     {
