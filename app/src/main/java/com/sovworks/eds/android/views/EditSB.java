@@ -28,11 +28,26 @@ public class EditSB extends AppCompatEditText
         setSaveEnabled(false);
     }
 
+    /**
+     * Clearing the secure buffer before replacing the text is the point of this class: the
+     * old passphrase must not be left lying in it. What was missing is the case where the
+     * incoming text IS the buffer.
+     *
+     * TextView.setTransformationMethod re-sets the view's own text, and setInputType goes
+     * through it whenever the masking changes. So pressing the reveal button reached
+     * setText(mText) with mText being this very Editable: it was cleared and then the
+     * now-empty buffer was copied back over itself. The passphrase the user pressed the
+     * button to look at was erased by the act of looking at it, with no message and nothing
+     * in the log, and the field simply appeared blank.
+     *
+     * The identity check is the whole fix. Every other caller passes a different
+     * CharSequence and still gets the buffer wiped first.
+     */
     @Override
     public void setText(CharSequence text, BufferType type)
     {
         Editable et = getEditableText();
-        if(et != null)
+        if(et != null && et != text)
             et.clear();
         super.setText(text, type);
     }

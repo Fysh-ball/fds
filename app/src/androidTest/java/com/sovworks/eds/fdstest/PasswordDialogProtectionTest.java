@@ -225,6 +225,39 @@ public class PasswordDialogProtectionTest
         assertTrue(isMasked(v, R.id.password_et));
     }
 
+    /**
+     * Revealing a passphrase must not destroy it.
+     *
+     * setInputType is not an innocent call on these fields. They are backed by an
+     * EditableSecureBuffer installed by setSecureBuffer, and EditSB.setText clears that buffer
+     * before writing: any path inside TextView that reaches setText while changing the input
+     * type would silently empty the box. The symptom would be a user pressing reveal to check
+     * a long passphrase, seeing it vanish, and having no idea whether the app or their finger
+     * did it. Reasoning about which TextView internals call setText is not evidence, so this
+     * types into both fields, toggles twice, and reads them back.
+     */
+    @Test
+    public void revealingThePassphraseDoesNotWipeIt()
+    {
+        View v = inflate(sVeraCrypt, false);
+        onUi(() -> {
+            ((EditSB) v.findViewById(R.id.password_et)).setText("outer-pass-1");
+            ((EditSB) v.findViewById(R.id.protection_password_et)).setText("hidden-pass-1");
+        });
+
+        onUi(() -> v.findViewById(R.id.toggle_show_pass).performClick());
+        assertArrayEquals("revealing wiped the passphrase",
+                "outer-pass-1".toCharArray(), sDialog.getPassword());
+        assertArrayEquals("revealing wiped the protection passphrase",
+                "hidden-pass-1".toCharArray(), sDialog.getProtectionPassword());
+
+        onUi(() -> v.findViewById(R.id.toggle_show_pass).performClick());
+        assertArrayEquals("masking again wiped the passphrase",
+                "outer-pass-1".toCharArray(), sDialog.getPassword());
+        assertArrayEquals("masking again wiped the protection passphrase",
+                "hidden-pass-1".toCharArray(), sDialog.getProtectionPassword());
+    }
+
     private static boolean isMasked(View root, int id)
     {
         int t = ((EditSB) root.findViewById(id)).getInputType();

@@ -260,6 +260,39 @@ corrupt". The flag is gone. The same edit released the `GetStringUTFChars` copy
 of the path on the success path, which every early return already released and
 which therefore leaked on every successful open.
 
+### The reveal button that erased the passphrase
+
+`EditSB` is the password field. It holds its characters in an
+`EditableSecureBuffer` rather than an ordinary `Editable` so the plaintext can be
+wiped, and its `setText` clears that buffer before writing the new text, which is
+the entire point of the class.
+
+What it did not account for is the case where the incoming text IS the buffer.
+`TextView.setTransformationMethod` re-sets the view's own text, and
+`setInputType` routes through it whenever the masking changes, so pressing the
+reveal button reached `setText(mText)` with `mText` being that very `Editable`.
+It was cleared, and the now-empty buffer was then copied back over itself.
+
+Pressing the reveal button erased the passphrase you pressed it to look at. No
+message, no log line, nothing in the exception path: the field simply appeared
+blank, and the obvious reading is that you had mistyped it. It is upstream
+behaviour on the ordinary passphrase field, so it predates this fork.
+
+The fix is an identity check. Every other caller passes a different
+`CharSequence` and still gets the buffer wiped first:
+
+```java
+if(et != null && et != text)
+    et.clear();
+```
+
+It was found by refusing to settle an argument by reasoning. The reveal button
+had just been extended to unmask the protection passphrase as well, and whether
+`setInputType` could reach `setText` on these fields was a question about
+`TextView` internals that could be answered either way from the source. Typing
+into both fields, toggling twice and reading them back answered it in one run:
+`expected.length=12 actual.length=0`.
+
 ### Hidden volumes
 
 Unlocked, and checked against a two-volume container built by desktop VeraCrypt
@@ -459,7 +492,7 @@ the crypto can only be exercised on a real ABI.
 | `HiddenVolumeProtectionTest` | every write that touches the protected extent is refused and every write that misses it goes through, both write paths, the refusal latches, a truncation below the hidden volume is refused, an empty protected range is rejected, and reads are never refused | an in-memory IO the test reads back byte for byte |
 | `OuterVolumeProtectionTest` | a write aimed at the hidden volume is refused and the hidden volume still opens with its original contents; the SAME write with no protection destroys it; a wrong protection passphrase refuses the mount | desktop VeraCrypt 1.26, and the unprotected control |
 | `ContainerLocationProtectionTest` | the second passphrase survives the trip from the location to the container and switches protection on; an identical open without it has protection off; an empty field means no protection rather than a failed mount; a wrong one refuses the mount as the message the UI shows; close() drops the passphrase | the container's own protected-range state, and the unprotected control |
-| `PasswordDialogProtectionTest` | the unlock dialog offers the protection field for a VeraCrypt container and not for LUKS or while creating one; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases | the LUKS location as the format control, and a known-bad build of the reveal arm |
+| `PasswordDialogProtectionTest` | the unlock dialog offers the protection field for a VeraCrypt container and not for LUKS or while creating one; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases and destroys neither | the LUKS location as the format control, and known-bad builds of both reveal arms |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific
@@ -478,11 +511,18 @@ builds:
 The two wipe arms fail against different builds and pass against each other's,
 which is the point: they are two assertions, not one test written twice.
 
-`PasswordDialogProtectionTest` was run against a build with the reveal fix
-reverted, where `revealingThePassphraseRevealsTheProtectionPassphraseToo` failed
-with `the reveal button left the protection passphrase masked` and the other
-seven passed. That second half is the part that matters: it says the known-bad
-build was still a working build, so the failure was the change and not the copy.
+`PasswordDialogProtectionTest` has two arms with known-bads, and neither needed
+a build made up for the purpose, because both were written against code that was
+already broken.
+
+| Arm | Known-bad | What it said |
+|---|---|---|
+| reveal unmasks both | `toggleShowPassword` before the fix | `the reveal button left the protection passphrase masked` |
+| reveal destroys neither | `EditSB.setText` before the fix | `revealing wiped the passphrase: array lengths differed, expected.length=12 actual.length=0` |
+
+In both runs the other tests passed, which is the half that matters: it says the
+known-bad build was still a working build, so the failure was the defect and not
+a broken copy.
 
 `OuterVolumeProtectionTest` carries its own known-bad rather than needing a
 reverted build for one. `theSameWriteWithoutProtectionDestroysTheHiddenVolume`
