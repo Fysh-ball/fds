@@ -123,12 +123,18 @@ if [ -n "$FILTER" ]; then
     ARGS+=("-Pandroid.testInstrumentationRunnerArguments.class=$FILTER")
     echo "filter: $FILTER"
 else
-    # The full negative matrix is 41 containers that each pay the whole hash sweep against
-    # both the normal and the hidden header, which is hours. It is @LargeTest and excluded
-    # here rather than deleted, and the exclusion is announced so that a green default run
-    # is never mistaken for a run of everything. Naming a class explicitly drops it:
+    # Two things are @LargeTest, and both are negative sweeps with no early exit, so they
+    # always pay the whole hash matrix:
+    #   UnsupportedMatrixTest                              41 containers, hours
+    #   KeyfileTest.aKeyfileContainerStaysShutWithoutIts.. 3 containers, 29 min measured
+    # Excluded here rather than deleted, and the exclusion is announced by NAME so that a
+    # green default run is never mistaken for a run of everything. Naming a class explicitly
+    # drops the filter and runs its large arms too:
     #   tools/run-fixture-tests.sh com.sovworks.eds.fdstest.UnsupportedMatrixTest
+    #   tools/run-fixture-tests.sh com.sovworks.eds.fdstest.KeyfileTest
     ARGS+=("-Pandroid.testInstrumentationRunnerArguments.notAnnotation=androidx.test.filters.LargeTest")
-    echo "excluded: @LargeTest (UnsupportedMatrixTest). Run it by name to include it."
+    echo "excluded: @LargeTest, which is UnsupportedMatrixTest (all of it) and"
+    echo "          KeyfileTest.aKeyfileContainerStaysShutWithoutItsKeyfiles."
+    echo "          Run either class by name to include it."
 fi
 (cd "$REPO" && ./gradlew --console=plain $LEAVE "${ARGS[@]+"${ARGS[@]}"}" :app:connectedDebugAndroidTest)
