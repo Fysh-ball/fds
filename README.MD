@@ -522,6 +522,7 @@ the crypto can only be exercised on a real ABI.
 | `PasswordDialogProtectionTest` | the unlock dialog offers the protection field for a VeraCrypt container and not for LUKS or while creating one; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases and destroys neither | the LUKS location as the format control, and known-bad builds of both reveal arms |
 | `LocationOpenerBundleTest` | the two Bundle hops between the dialog and the location: what the dialog holds reaches the result bundle and is copied onto the open request, a dialog that never offered the field puts nothing there, and the deliberate asymmetry holds (an empty protection passphrase overwrites a stale one, an empty password does not overwrite a saved one) | the bundle contents themselves, and a known-bad that gives the protection branch the password branch's rule |
 | `SettingsKeyLockTest` | a protected setting round-trips; dropping the cached settings key costs nothing but a re-derivation and hands back a different buffer; a saved container password still opens after the lock; clearing the master password erases it rather than dropping the reference; and the WRONG lock, erasing the key buffer without dropping the cache, breaks every protected read AND throws out of the saved-password path | the protected preference itself, and the broken state as an executable known-bad |
+| `KeyfileTest` | the VeraCrypt keyfile pool, byte for byte against an independent implementation, for one keyfile and for two; keyfile order does not matter; bytes past 1 MiB are ignored and bytes inside the window are not; the pool mixes into an empty, a short and a long passphrase correctly; and three real keyfile containers open with their keyfiles, refuse the wrong keyfile, and refuse the passphrase alone | an independent Python implementation of `Common/Keyfile.c`, and three desktop VeraCrypt containers |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific
@@ -588,6 +589,60 @@ reverted build for one. `theSameWriteWithoutProtectionDestroysTheHiddenVolume`
 performs the identical write on an identical copy with the wrapper absent, and
 requires the hidden volume to come back damaged. Without it, the protected arm
 would pass just as happily if the write had been harmless all along.
+
+### Keyfiles
+
+The keyfile algorithm is fixed by the on-disk format, so there is nothing to
+design and three things to get wrong. All three produce a container that this
+app and desktop VeraCrypt disagree about, and the disagreement looks exactly
+like a wrong passphrase, which is the worst possible symptom: the user retypes
+a passphrase that was right the whole time.
+
+1. **The CRC is never finalised.** VeraCrypt feeds the running CRC-32 register
+   into the pool as it goes and never applies the final xor. `java.util.zip.CRC32`
+   computes the same polynomial and finalises, so it is the obvious class to
+   reach for and it is wrong.
+2. **The CRC restarts per keyfile, the pool does not.** Each keyfile begins at
+   `0xffffffff` again, but the 64 byte pool accumulates across all of them, and
+   the write position resets to 0 per keyfile.
+3. **The additions are mod 256.** `pool[w] += crc >>> 24` on a byte, with the
+   overflow discarded, not widened.
+
+`Keyfiles.java` carries all three, and `KeyfileTest` checks them against a
+separate Python implementation of `Common/Keyfile.c` rather than against
+itself. Two golden pool vectors are pinned in the test, so a future edit that
+changes the algorithm has to change the vectors too, which is a decision
+someone has to make on purpose.
+
+None of that would be worth much on its own. Golden vectors prove two
+implementations agree, not that either matches VeraCrypt. So
+`tools/mkkeyfilefixture.sh` builds three containers with real VeraCrypt and,
+for each one, verifies at creation time that it mounts WITH its keyfiles and
+refuses WITHOUT. A keyfile silently ignored during creation cannot produce a
+fixture that passes.
+
+The positive arms have been run against a known-bad. Injecting mistake 1, a
+finalised CRC, into `Keyfiles.mixInto` failed all three:
+
+| Arm | What it said |
+|---|---|
+| the one keyfile pool | `arrays first differed at element [0]; expected:<89> but was:<-89>` |
+| the two keyfile pool | `arrays first differed at element [0]; expected:<89> but was:<104>` |
+| every keyfile container opens | `keyfile_single did not open with its own keyfiles (kf1.bin): WrongFileFormatException: Wrong password or unsupported container format` |
+
+That third line is the symptom this whole section is about, produced on demand.
+
+`aKeyfileContainerStaysShutWithoutItsKeyfiles` is `@LargeTest`. It measured 29
+minutes on the emulator: three containers, each swept over every layout and
+every hash, because a negative open has no early exit and always pays the full
+matrix. `theWrongKeyfileDoesNotOpenIt` is one container at about seven minutes
+and stays in the default run, which is enough to catch a keyfile pool that is
+being ignored.
+
+`FormatInfo.hasKeyfilesSupport()` still returns false, deliberately. The
+algorithm is landed and tested; nothing in the UI reads a keyfile yet, and the
+comment there already says a format should not advertise a field nothing
+consumes. It flips when the picker exists.
 
 `UnsupportedMatrixTest` is `@LargeTest` and the runner excludes it unless you
 name it, because every fixture in it pays the whole hash sweep twice. The

@@ -85,8 +85,14 @@ for f in "$FIX"/*.hc; do
     [ -e "$f" ] || { echo "FAIL: no .hc containers in $FIX" >&2; exit 1; }
     "$ADB" push -q "$f" "$DEST/" >/dev/null
 done
-for m in manifest.tsv payload-manifest.tsv hidden-manifest.tsv; do
-    [ -f "$FIX/$m" ] || { echo "FAIL: $FIX/$m missing. Run tools/mkfixtures.sh and tools/mkhiddenfixture.sh." >&2; exit 1; }
+# The keyfiles themselves, before the manifests. They are not .hc so the glob above misses
+# them, and a keyfile fixture without its keyfile is a container nothing can open.
+for k in "$FIX"/kf*.bin; do
+    [ -e "$k" ] || { echo "FAIL: no kf*.bin keyfiles in $FIX. Run tools/mkkeyfilefixture.sh." >&2; exit 1; }
+    "$ADB" push -q "$k" "$DEST/" >/dev/null
+done
+for m in manifest.tsv payload-manifest.tsv hidden-manifest.tsv keyfile-manifest.tsv; do
+    [ -f "$FIX/$m" ] || { echo "FAIL: $FIX/$m missing. Run tools/mkfixtures.sh, tools/mkhiddenfixture.sh and tools/mkkeyfilefixture.sh." >&2; exit 1; }
     "$ADB" push -q "$FIX/$m" "$DEST/" >/dev/null
 done
 
@@ -105,7 +111,7 @@ echo "containers: host=$want device=$got"
 
 # The manifests are what the tests read first, so verify them by name rather than trusting
 # the container count to stand in for them.
-for m in manifest.tsv payload-manifest.tsv hidden-manifest.tsv; do
+for m in manifest.tsv payload-manifest.tsv hidden-manifest.tsv keyfile-manifest.tsv; do
     "$ADB" shell "test -r $DEST/$m" \
         || { echo "FAIL: $m is missing or unreadable at $DEST" >&2; exit 1; }
 done
