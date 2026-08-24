@@ -14,6 +14,7 @@ import android.os.IBinder;
 import android.os.SystemClock;
 import androidx.core.app.NotificationCompat;
 
+import com.sovworks.eds.android.EdsApplicationBase;
 import com.sovworks.eds.android.Logger;
 import com.sovworks.eds.android.R;
 import com.sovworks.eds.android.filemanager.activities.FileManagerActivity;
@@ -181,6 +182,7 @@ public class LocationsServiceBase extends Service
 					// is readable by whoever picks the device up, and an open file handle is
 					// not a reason to keep it that way.
 					_locationsManager.closeAllLocations(true, true);
+					forgetResidentKeys(context);
 				}
 			};
 			// No RECEIVER_EXPORTED / RECEIVER_NOT_EXPORTED flag: that is required from
@@ -224,6 +226,49 @@ public class LocationsServiceBase extends Service
 	 * service, so before this the containers stayed mounted with no window left to close
 	 * them from except the notification. Upstream never implemented onTaskRemoved at all.
 	 */
+	/**
+	 * Closing the containers is not the whole of a lock. Two pieces of key material outlive
+	 * every location: the master password the user typed to unlock protected settings, and
+	 * the 32 byte settings protection key derived from it. Both sit in process memory for as
+	 * long as the process lives, so before this change a screen-off lock closed every
+	 * container and left the master password sitting behind it.
+	 *
+	 * Both holders are cleared through their own methods, which close the buffer AND null the
+	 * field. That second half is the part that matters. getSettingsProtectionKey memoises on
+	 * "field is null", so erasing the buffer without nulling the field would leave the cache
+	 * looking populated while pointing at a dead id: the next protected read reaches
+	 * SimpleCrypto.decrypt, which throws "key is closed", and getProtectedData turns that into
+	 * InvalidSettingsPassword. The app would tell the user their settings password is wrong
+	 * when nothing of the sort had happened.
+	 *
+	 * SecureBuffer.closeAll() is deliberately NOT called here, and it still has no callers
+	 * anywhere in the tree. It is a process-wide sweep of a static registry with no notion of
+	 * whether a buffer is in use, and one of the seven SecureBuffer fields in this codebase is
+	 * EDSLocationFormatterBase._password, held for the whole of a container creation. A KDF
+	 * over several hundred thousand iterations is exactly the moment a screen times out, and
+	 * the sweep would pull the passphrase out from under it. The targeted clears above reach
+	 * the two buffers that actually outlive a lock; the rest are already erased by
+	 * Location.close(), which closeAllLocations has just finished calling.
+	 *
+	 * Only re-derivation can fail, and only for a user who set a master password: with none
+	 * set the key comes back from the device-local automatic password with nothing to type.
+	 * For a user who did set one, being asked again after a lock IS the feature.
+	 */
+	private static void forgetResidentKeys(Context context)
+	{
+		try
+		{
+			EdsApplicationBase.clearMasterPassword();
+			UserSettings.getSettings(context).clearSettingsProtectionKey();
+		}
+		catch (Throwable e)
+		{
+			// Never let this take the lock down with it: the containers are already closed by
+			// the time this runs, and that is the half that protects the data.
+			Logger.log(e);
+		}
+	}
+
 	@Override
 	public void onTaskRemoved(Intent rootIntent)
 	{
@@ -233,6 +278,12 @@ public class LocationsServiceBase extends Service
 			{
 				Logger.debug("Task removed. Closing locations");
 				_locationsManager.closeAllLocations(true, true);
+				// Same reasoning as the screen-off path: swiping the app away is a lock, and a
+				// lock that leaves the master password resident is half a lock. Not done in
+				// onDestroy, which also runs when the last container is simply closed: that
+				// would sign the user out of protected settings every time, which is more than
+				// either preference asks for.
+				forgetResidentKeys(this);
 			}
 		}
 		catch(Throwable e)

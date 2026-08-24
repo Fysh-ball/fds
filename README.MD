@@ -400,6 +400,33 @@ registered by `LocationsServiceBase` at runtime and unregistered in `onDestroy`.
 The close is forced, so unsaved data can be lost: that trade is stated in the
 setting's own description rather than buried here.
 
+**A lock also forgets the keys the containers did not hold.** Closing every
+location wipes each container's passphrase, because `Location.close()` already
+does that. Two pieces of key material outlive every location, though: the master
+password the user typed to unlock protected settings, and the 32 byte settings
+protection key derived from it. Before this both sat in process memory behind a
+locked screen, so the lock closed the containers and left the password that
+guards the saved container passwords sitting next to them. Both lock paths now
+clear them.
+
+The obvious way to write that is wrong, and the test says so rather than the
+comment. `SecureBuffer.closeAll()` erases every registered buffer and looks like
+exactly the right call at a lock point. It has no callers here and still does not
+after this change, for two reasons. It cannot reach the field that caches the
+settings key, so `getSettingsProtectionKey` would go on memoising a dead
+buffer, the next protected read would throw `key is closed`, and the app would
+report a wrong settings password to a user who never set one. And it is a
+process-wide sweep with no notion of what is in use: one of the seven
+`SecureBuffer` fields in this tree is held for the whole of a container
+creation, and a screen timing out during a several-hundred-thousand-iteration
+KDF is not a hypothetical. The lock clears the two holders through their own
+methods, which erase the buffer *and* null the field.
+
+Only re-derivation can fail, and only for someone who set a master password:
+with none set the key comes back from the device-local automatic password with
+nothing to type. For someone who did set one, being asked again after a lock is
+the feature.
+
 **Writes inside a mounted container are buffered until close.** A crash, a kill,
 or a battery pull loses them. That is inherited behaviour, not something these
 locks introduced, but the locks make it reachable more often, and it is not fixed
@@ -494,6 +521,7 @@ the crypto can only be exercised on a real ABI.
 | `ContainerLocationProtectionTest` | the second passphrase survives the trip from the location to the container and switches protection on; an identical open without it has protection off; an empty field means no protection rather than a failed mount; a wrong one refuses the mount as the message the UI shows; close() drops the passphrase | the container's own protected-range state, and the unprotected control |
 | `PasswordDialogProtectionTest` | the unlock dialog offers the protection field for a VeraCrypt container and not for LUKS or while creating one; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases and destroys neither | the LUKS location as the format control, and known-bad builds of both reveal arms |
 | `LocationOpenerBundleTest` | the two Bundle hops between the dialog and the location: what the dialog holds reaches the result bundle and is copied onto the open request, a dialog that never offered the field puts nothing there, and the deliberate asymmetry holds (an empty protection passphrase overwrites a stale one, an empty password does not overwrite a saved one) | the bundle contents themselves, and a known-bad that gives the protection branch the password branch's rule |
+| `SettingsKeyLockTest` | a protected setting round-trips; dropping the cached settings key costs nothing but a re-derivation and hands back a different buffer; clearing the master password erases it rather than dropping the reference; and erasing the key buffer WITHOUT dropping the cache breaks every protected read, which is the hazard the lock is written to avoid | the protected preference itself, and the broken state as an executable known-bad |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific
@@ -534,6 +562,14 @@ apart, and the obvious tidy-up is to make the second look like the first. Giving
 the protection branch the password branch's rule failed exactly one test with
 `clearing the field left the previous protection passphrase in force
 expected:<0> but was:<23>`, and the other four passed.
+
+`SettingsKeyLockTest` carries its known-bad as a test rather than as a reverted
+build, because the wrong version is a call that exists:
+`erasingTheBufferWithoutDroppingTheCacheBreaksProtectedReads` closes the key
+buffer the way `SecureBuffer.closeAll()` would, requires the next protected read
+to fail, and then requires the supported clear to repair it. If that test ever
+stops throwing, the memoisation has changed and the reasoning written beside the
+lock is stale.
 
 `OuterVolumeProtectionTest` carries its own known-bad rather than needing a
 reverted build for one. `theSameWriteWithoutProtectionDestroysTheHiddenVolume`
