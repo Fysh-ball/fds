@@ -316,22 +316,38 @@ public abstract class PasswordDialogBase extends RxDialogFragment
         return args!=null && args.getBoolean(ARG_VERIFY_PASSWORD, false);
     }
 
+    /**
+     * The protection field is toggled with the other two.
+     *
+     * It was left out when the field was added, and the result was a button that reveals one
+     * passphrase and not the other, on a dialog where the two are typed one under the other.
+     * That is not a cosmetic inconsistency: the reason to reveal a passphrase at all is to
+     * check a long one for a typo, and a typo in the protection passphrase does not report
+     * itself as a typo. It refuses the mount with the same message a container holding no
+     * hidden volume gives, which is deliberate and is exactly why the user cannot tell the
+     * two apart by trying again.
+     */
     protected void toggleShowPassword(ImageButton b)
     {
         int inputType = _passwordEditText.getInputType();
         if ((inputType & EditorInfo.TYPE_MASK_VARIATION) == EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD)
         {
-            _passwordEditText.setInputType(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_PASSWORD);
-            if (_repeatPasswordEditText != null)
-                _repeatPasswordEditText.setInputType(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_PASSWORD);
+            setInputTypeOnAll(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_PASSWORD);
             b.setImageResource(R.drawable.ic_show_pass);
         } else
         {
-            _passwordEditText.setInputType(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
-            if (_repeatPasswordEditText != null)
-                _repeatPasswordEditText.setInputType(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
+            setInputTypeOnAll(EditorInfo.TYPE_CLASS_TEXT | EditorInfo.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD);
             b.setImageResource(R.drawable.ic_hide_pass);
         }
+    }
+
+    private void setInputTypeOnAll(int inputType)
+    {
+        _passwordEditText.setInputType(inputType);
+        if (_repeatPasswordEditText != null)
+            _repeatPasswordEditText.setInputType(inputType);
+        if (_protectionPasswordEditText != null)
+            _protectionPasswordEditText.setInputType(inputType);
     }
 
     protected void openOptions()

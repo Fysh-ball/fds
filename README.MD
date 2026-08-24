@@ -302,6 +302,19 @@ itself be the proof, readable by whoever is holding the phone. For the same
 reason the field is offered on every container whose format supports hidden
 volumes, whether or not one is there.
 
+It is offered only where it can mean something: on the open path, never while
+creating a container, and only for formats that have hidden volumes at all. LUKS
+does not, and asking for a second passphrase there would invite the user to type
+one and then refuse the mount, which reads as the app being broken. Gating on the
+format leaks nothing, because which formats support hidden volumes is public.
+
+The reveal button unmasks both passphrases together. It did not at first, and the
+gap mattered more than it looks: the reason to reveal a passphrase is to check a
+long one for a typo, and a typo in the protection passphrase does not announce
+itself as one. It refuses the mount with the same message a container holding no
+hidden volume gives, which is deliberate, and is exactly why looking at what was
+typed is the only way to tell them apart.
+
 Known gap: a location with a saved password skips the unlock dialog, so there is
 currently no way to enter a protection passphrase for one.
 
@@ -405,10 +418,11 @@ wipe instead of unlinking.
 - **M3 unlock the gated features** - hidden volumes done, VeraCrypt passphrase
   cap raised from TrueCrypt's 64 to VeraCrypt's 128, and the format/cipher/hash
   of a successful open are now remembered instead of being left buried in a
-  long-press menu. Outer-volume protection is done, core and UI, with a
-  destructive control test proving the unprotected write really does destroy the
-  hidden volume. Outstanding: hidden volume creation, keyfiles (has to be written
-  from scratch)
+  long-press menu. Outer-volume protection is done, core and UI, verified at all
+  four levels: the container, the location, the unlock dialog, and end to end
+  with a destructive control test proving the unprotected write really does
+  destroy the hidden volume. Outstanding: hidden volume creation, keyfiles (has
+  to be written from scratch)
 - **M4 hardening** - `allowBackup=false`, `FLAG_SECURE` on by default, both
   automatic locks, the key-zeroing pass and the wipe fix are done. The zeroing
   pass covered the three paths that leaked key material on the failure branch:
@@ -445,6 +459,7 @@ the crypto can only be exercised on a real ABI.
 | `HiddenVolumeProtectionTest` | every write that touches the protected extent is refused and every write that misses it goes through, both write paths, the refusal latches, a truncation below the hidden volume is refused, an empty protected range is rejected, and reads are never refused | an in-memory IO the test reads back byte for byte |
 | `OuterVolumeProtectionTest` | a write aimed at the hidden volume is refused and the hidden volume still opens with its original contents; the SAME write with no protection destroys it; a wrong protection passphrase refuses the mount | desktop VeraCrypt 1.26, and the unprotected control |
 | `ContainerLocationProtectionTest` | the second passphrase survives the trip from the location to the container and switches protection on; an identical open without it has protection off; an empty field means no protection rather than a failed mount; a wrong one refuses the mount as the message the UI shows; close() drops the passphrase | the container's own protected-range state, and the unprotected control |
+| `PasswordDialogProtectionTest` | the unlock dialog offers the protection field for a VeraCrypt container and not for LUKS or while creating one; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases | the LUKS location as the format control, and a known-bad build of the reveal arm |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific
@@ -462,6 +477,12 @@ builds:
 
 The two wipe arms fail against different builds and pass against each other's,
 which is the point: they are two assertions, not one test written twice.
+
+`PasswordDialogProtectionTest` was run against a build with the reveal fix
+reverted, where `revealingThePassphraseRevealsTheProtectionPassphraseToo` failed
+with `the reveal button left the protection passphrase masked` and the other
+seven passed. That second half is the part that matters: it says the known-bad
+build was still a working build, so the failure was the change and not the copy.
 
 `OuterVolumeProtectionTest` carries its own known-bad rather than needing a
 reverted build for one. `theSameWriteWithoutProtectionDestroysTheHiddenVolume`
