@@ -521,7 +521,7 @@ the crypto can only be exercised on a real ABI.
 | `ContainerLocationProtectionTest` | the second passphrase survives the trip from the location to the container and switches protection on; an identical open without it has protection off; an empty field means no protection rather than a failed mount; a wrong one refuses the mount as the message the UI shows; close() drops the passphrase | the container's own protected-range state, and the unprotected control |
 | `PasswordDialogProtectionTest` | the unlock dialog offers the protection field for a VeraCrypt container and not for LUKS or while creating one; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases and destroys neither | the LUKS location as the format control, and known-bad builds of both reveal arms |
 | `LocationOpenerBundleTest` | the two Bundle hops between the dialog and the location: what the dialog holds reaches the result bundle and is copied onto the open request, a dialog that never offered the field puts nothing there, and the deliberate asymmetry holds (an empty protection passphrase overwrites a stale one, an empty password does not overwrite a saved one) | the bundle contents themselves, and a known-bad that gives the protection branch the password branch's rule |
-| `SettingsKeyLockTest` | a protected setting round-trips; dropping the cached settings key costs nothing but a re-derivation and hands back a different buffer; clearing the master password erases it rather than dropping the reference; and erasing the key buffer WITHOUT dropping the cache breaks every protected read, which is the hazard the lock is written to avoid | the protected preference itself, and the broken state as an executable known-bad |
+| `SettingsKeyLockTest` | a protected setting round-trips; dropping the cached settings key costs nothing but a re-derivation and hands back a different buffer; a saved container password still opens after the lock; clearing the master password erases it rather than dropping the reference; and the WRONG lock, erasing the key buffer without dropping the cache, breaks every protected read AND throws out of the saved-password path | the protected preference itself, and the broken state as an executable known-bad |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific
@@ -563,13 +563,25 @@ the protection branch the password branch's rule failed exactly one test with
 `clearing the field left the previous protection passphrase in force
 expected:<0> but was:<23>`, and the other four passed.
 
-`SettingsKeyLockTest` carries its known-bad as a test rather than as a reverted
-build, because the wrong version is a call that exists:
-`erasingTheBufferWithoutDroppingTheCacheBreaksProtectedReads` closes the key
-buffer the way `SecureBuffer.closeAll()` would, requires the next protected read
-to fail, and then requires the supported clear to repair it. If that test ever
-stops throwing, the memoisation has changed and the reasoning written beside the
-lock is stale.
+`SettingsKeyLockTest` carries its known-bads as tests rather than as reverted
+builds, because the wrong version is a call that exists. Two arms close the key
+buffer the way `SecureBuffer.closeAll()` would, require the next read to fail,
+and then require the supported clear to repair it. If either ever stops
+throwing, the memoisation has changed and the reasoning written beside the lock
+is stale.
+
+| Arm | Wrong lock | What it said |
+|---|---|---|
+| protected settings readable after a lock | `getSettingsProtectionKey().close()` | `InvalidSettingsPassword`, which is the app reporting a wrong settings password to someone who never set one |
+| a saved container password survives a lock | the same one call | `RuntimeException: key is closed`, thrown out of `ExternalSettings.getPassword` |
+
+That second pair is the one worth having. A saved container password is not
+stored in the clear: `setPassword` encrypts it immediately with the SAME
+settings protection key the lock drops. So "the lock forgets the settings key"
+and "the lock forgets every saved container password" sit one wiring mistake
+apart, and only the first is intended. The positive arm goes through a real
+`VeraCryptLocation` and its real external settings, because the provider is the
+part that could be wired wrong.
 
 `OuterVolumeProtectionTest` carries its own known-bad rather than needing a
 reverted build for one. `theSameWriteWithoutProtectionDestroysTheHiddenVolume`
