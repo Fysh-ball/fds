@@ -493,6 +493,7 @@ the crypto can only be exercised on a real ABI.
 | `OuterVolumeProtectionTest` | a write aimed at the hidden volume is refused and the hidden volume still opens with its original contents; the SAME write with no protection destroys it; a wrong protection passphrase refuses the mount | desktop VeraCrypt 1.26, and the unprotected control |
 | `ContainerLocationProtectionTest` | the second passphrase survives the trip from the location to the container and switches protection on; an identical open without it has protection off; an empty field means no protection rather than a failed mount; a wrong one refuses the mount as the message the UI shows; close() drops the passphrase | the container's own protected-range state, and the unprotected control |
 | `PasswordDialogProtectionTest` | the unlock dialog offers the protection field for a VeraCrypt container and not for LUKS or while creating one; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases and destroys neither | the LUKS location as the format control, and known-bad builds of both reveal arms |
+| `LocationOpenerBundleTest` | the two Bundle hops between the dialog and the location: what the dialog holds reaches the result bundle and is copied onto the open request, a dialog that never offered the field puts nothing there, and the deliberate asymmetry holds (an empty protection passphrase overwrites a stale one, an empty password does not overwrite a saved one) | the bundle contents themselves, and a known-bad that gives the protection branch the password branch's rule |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific
@@ -523,6 +524,16 @@ already broken.
 In both runs the other tests passed, which is the half that matters: it says the
 known-bad build was still a working build, so the failure was the defect and not
 a broken copy.
+
+`LocationOpenerBundleTest` pins one asymmetry that looks like a copy-paste
+mistake and is not. An empty PROTECTION passphrase overwrites a stale one,
+because the request bundle is reused across attempts and an empty box means the
+user cleared it; an empty PASSWORD does not overwrite a saved one, because a
+blank password box means "use the one you have". Those two rules sit a few lines
+apart, and the obvious tidy-up is to make the second look like the first. Giving
+the protection branch the password branch's rule failed exactly one test with
+`clearing the field left the previous protection passphrase in force
+expected:<0> but was:<23>`, and the other four passed.
 
 `OuterVolumeProtectionTest` carries its own known-bad rather than needing a
 reverted build for one. `theSameWriteWithoutProtectionDestroysTheHiddenVolume`
