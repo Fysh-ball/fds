@@ -355,8 +355,11 @@ Creating hidden volumes is still not implemented: use desktop VeraCrypt for that
 
 ### Keyfiles
 
-Not implemented, and not merely switched off. The whole tree contains three
-references to the feature and none of them is an implementation. See NOTICE.
+Half done. Upstream had no implementation at all (see NOTICE), so the VeraCrypt
+keyfile pool was written from scratch in `truecrypt/Keyfiles.java` and is tested
+against real desktop VeraCrypt containers; see Keyfiles under Testing. There is
+no keyfile picker yet, so `FormatInfo.hasKeyfilesSupport()` still returns false
+and a keyfile container cannot be opened from the UI.
 
 ### Branding and the About dialog
 
@@ -481,8 +484,8 @@ wipe instead of unlinking.
   long-press menu. Outer-volume protection is done, core and UI, verified at all
   four levels: the container, the location, the unlock dialog, and end to end
   with a destructive control test proving the unprotected write really does
-  destroy the hidden volume. Outstanding: hidden volume creation, keyfiles (has
-  to be written from scratch)
+  destroy the hidden volume. Keyfile derivation is written and matches VeraCrypt.
+  Outstanding: hidden volume creation, the keyfile picker UI
 - **M4 hardening** - `allowBackup=false`, `FLAG_SECURE` on by default, both
   automatic locks, the key-zeroing pass and the wipe fix are done. The zeroing
   pass covered the three paths that leaked key material on the failure branch:
