@@ -6,6 +6,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import android.net.Uri;
 import android.os.Bundle;
 
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -17,6 +18,10 @@ import com.sovworks.eds.locations.Openable;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * The two Bundle hops between the unlock dialog and the location.
@@ -60,9 +65,21 @@ public class LocationOpenerBundleTest
     {
         StubDialog(char[] password, char[] protection)
         {
+            this(password, protection, null);
+        }
+
+        StubDialog(char[] password, char[] protection, List<Uri> keyfiles)
+        {
             _password = password;
             _protection = protection;
+            _keyfileList = keyfiles;
             _options = new Bundle();
+        }
+
+        @Override
+        public List<Uri> getKeyfiles()
+        {
+            return _keyfileList;
         }
 
         @Override
@@ -78,6 +95,7 @@ public class LocationOpenerBundleTest
         }
 
         private final char[] _password, _protection;
+        private final List<Uri> _keyfileList;
     }
 
     @Test
@@ -167,6 +185,55 @@ public class LocationOpenerBundleTest
         assertNotNull(sb);
         assertArrayEquals("a blank field wiped the saved password",
                 "saved".toCharArray(), chars(sb));
+    }
+
+    // ---- keyfiles take the same two hops -------------------------------------------
+
+    private static final List<Uri> KEYFILES = Arrays.asList(
+            Uri.parse("content://fdstest/kf1"), Uri.parse("content://fdstest/kf2"));
+
+    /**
+     * Keyfiles are half of the credential, and dropping them on either hop produces the
+     * worst symptom there is: the passphrase alone is tried, the container refuses it, and
+     * the user is told the passphrase is wrong when it is right.
+     */
+    @Test
+    public void keyfilesReachTheOpenRequest()
+    {
+        Bundle res = new ProbeOpener().resultBundleFor(
+                new StubDialog("pw".toCharArray(), null, KEYFILES));
+        assertEquals("keyfiles never reached the result bundle",
+                KEYFILES, res.getParcelableArrayList(Openable.PARAM_KEYFILES));
+        Bundle args = new Bundle();
+        new ProbeOpener().applyTo(args, res);
+        assertEquals("keyfiles were dropped on the way to the open request",
+                KEYFILES, args.getParcelableArrayList(Openable.PARAM_KEYFILES));
+    }
+
+    /** A dialog that never offered keyfiles (LUKS, or creating a container) writes nothing. */
+    @Test
+    public void aDialogThatNeverOfferedKeyfilesPutsNothingInTheBundle()
+    {
+        Bundle res = new ProbeOpener().resultBundleFor(
+                new StubDialog("pw".toCharArray(), null, null));
+        assertFalse(res.containsKey(Openable.PARAM_KEYFILES));
+    }
+
+    /**
+     * The protection passphrase's rule, not the password's: an empty list is the user
+     * removing keyfiles picked on an earlier attempt and must overwrite them.
+     */
+    @Test
+    public void anEmptyKeyfileListOverwritesAStaleOne()
+    {
+        Bundle args = new Bundle();
+        args.putParcelableArrayList(Openable.PARAM_KEYFILES, new ArrayList<>(KEYFILES));
+        Bundle res = new ProbeOpener().resultBundleFor(
+                new StubDialog("pw".toCharArray(), null, new ArrayList<Uri>()));
+        new ProbeOpener().applyTo(args, res);
+        List<Uri> kf = args.getParcelableArrayList(Openable.PARAM_KEYFILES);
+        assertNotNull(kf);
+        assertTrue("removing the keyfiles left the previous ones in force", kf.isEmpty());
     }
 
     /**

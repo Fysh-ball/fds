@@ -1,8 +1,11 @@
 package com.sovworks.eds.android.dialogs;
 
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.view.LayoutInflater;
@@ -17,6 +20,7 @@ import android.widget.Toast;
 
 import com.sovworks.eds.android.R;
 import com.sovworks.eds.android.helpers.Util;
+import com.sovworks.eds.android.locations.ContainerBasedLocation;
 import com.sovworks.eds.android.settings.activities.OpeningOptionsActivity;
 import com.sovworks.eds.android.views.EditSB;
 import com.sovworks.eds.container.ContainerFormatInfo;
@@ -25,6 +29,9 @@ import com.sovworks.eds.locations.ContainerLocation;
 import com.sovworks.eds.locations.LocationsManager;
 import com.sovworks.eds.locations.Openable;
 import com.trello.rxlifecycle3.components.RxDialogFragment;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import static android.view.ViewGroup.LayoutParams.WRAP_CONTENT;
 
@@ -53,6 +60,15 @@ public abstract class PasswordDialogBase extends RxDialogFragment
                 getLocationsManager(getActivity()).
                 getFromBundle(getArguments(), null);
         _options = savedInstanceState == null ? getArguments() : savedInstanceState;
+        if(savedInstanceState != null)
+        {
+            ArrayList<Uri> kf = savedInstanceState.getParcelableArrayList(STATE_KEYFILES);
+            if(kf != null)
+                _keyfiles.addAll(kf);
+            // Out of _options, which is handed on as the open request's options and has no
+            // business carrying the dialog's own state.
+            _options.remove(STATE_KEYFILES);
+        }
     }
 
     @Override
@@ -120,6 +136,21 @@ public abstract class PasswordDialogBase extends RxDialogFragment
             if(_protectionPasswordEditText != null)
                 _protectionPasswordEditText.setVisibility(View.GONE);
         }
+
+        _keyfilesButton = v.findViewById(R.id.keyfiles_button);
+        _keyfilesClearButton = v.findViewById(R.id.keyfiles_clear);
+        _keyfilesTextView = v.findViewById(R.id.keyfiles_list);
+        View keyfilesLayout = v.findViewById(R.id.keyfiles_layout);
+        if(keyfilesLayout != null)
+            keyfilesLayout.setVisibility(hasKeyfiles() ? View.VISIBLE : View.GONE);
+        if(_keyfilesButton != null)
+            _keyfilesButton.setOnClickListener(view -> pickKeyfiles());
+        if(_keyfilesClearButton != null)
+            _keyfilesClearButton.setOnClickListener(view -> {
+                _keyfiles.clear();
+                updateKeyfilesView();
+            });
+        updateKeyfilesView();
 
         View passwordLayout = v.findViewById(R.id.password_layout);
         if(passwordLayout!=null)
@@ -200,6 +231,10 @@ public abstract class PasswordDialogBase extends RxDialogFragment
                 if (resultCode == Activity.RESULT_OK)
                     _options = data.getExtras();
                 break;
+            case REQUEST_KEYFILES:
+                if (resultCode == Activity.RESULT_OK && data != null)
+                    addKeyfiles(data);
+                break;
             default:
                 super.onActivityResult(requestCode, resultCode, data);
         }
@@ -256,12 +291,119 @@ public abstract class PasswordDialogBase extends RxDialogFragment
         return false;
     }
 
+    /**
+     * The keyfiles picked in this dialog, or null if the dialog does not offer them. An EMPTY
+     * list is not the same as null, for the same reason as getProtectionPassword(): it tells
+     * the location to drop keyfiles left over from a previous attempt.
+     */
+    public List<Uri> getKeyfiles()
+    {
+        if(!hasKeyfiles())
+            return null;
+        return new ArrayList<>(_keyfiles);
+    }
+
+    /**
+     * Offered only when opening an existing container of a format that has keyfiles.
+     *
+     * Not while creating one: this app cannot yet create a container with keyfiles, and a
+     * picker on the create dialog would make one that silently ignored them. Not for LUKS,
+     * whose keyfiles are a different mechanism this app does not implement.
+     */
+    protected boolean hasKeyfiles()
+    {
+        if(!hasPassword() || isPasswordVerificationRequired()
+                || !(_location instanceof ContainerLocation))
+            return false;
+        for(ContainerFormatInfo cfi: ((ContainerLocation) _location).getSupportedFormats())
+            if(cfi != null && cfi.hasKeyfilesSupport())
+                return true;
+        return false;
+    }
+
+    /**
+     * The system picker rather than the app's own file browser. It needs no storage
+     * permission, it reaches every provider (cloud, USB, another app's files), and it is the
+     * access model scoped storage will require anyway.
+     */
+    protected void pickKeyfiles()
+    {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        try
+        {
+            startActivityForResult(i, REQUEST_KEYFILES);
+        }
+        catch(ActivityNotFoundException e)
+        {
+            Toast.makeText(getActivity(), R.string.keyfiles_no_picker, Toast.LENGTH_LONG).show();
+        }
+    }
+
+    /**
+     * Adds to the list rather than replacing it, as VeraCrypt's own dialog does, so keyfiles
+     * that live in different places can be collected in more than one trip to the picker.
+     * Picking the same file twice keeps one copy: the format would count it twice, which is
+     * never what anyone meant by selecting it again.
+     */
+    protected void addKeyfiles(Intent data)
+    {
+        ClipData clip = data.getClipData();
+        if(clip != null)
+        {
+            for(int i = 0; i < clip.getItemCount(); i++)
+                addKeyfile(clip.getItemAt(i).getUri());
+        }
+        else
+            addKeyfile(data.getData());
+        updateKeyfilesView();
+    }
+
+    private void addKeyfile(Uri uri)
+    {
+        if(uri != null && !_keyfiles.contains(uri))
+            _keyfiles.add(uri);
+    }
+
+    protected void updateKeyfilesView()
+    {
+        boolean any = !_keyfiles.isEmpty();
+        if(_keyfilesClearButton != null)
+            _keyfilesClearButton.setVisibility(any ? View.VISIBLE : View.GONE);
+        if(_keyfilesTextView != null)
+        {
+            if(any)
+            {
+                StringBuilder sb = new StringBuilder();
+                for(Uri u: _keyfiles)
+                {
+                    if(sb.length() > 0)
+                        sb.append('\n');
+                    sb.append(ContainerBasedLocation.getKeyfileDisplayName(
+                            _keyfilesTextView.getContext(), u));
+                }
+                _keyfilesTextView.setText(sb);
+                _keyfilesTextView.setVisibility(View.VISIBLE);
+            }
+            else
+            {
+                _keyfilesTextView.setText(null);
+                _keyfilesTextView.setVisibility(View.GONE);
+            }
+        }
+    }
+
     @Override
     public void onSaveInstanceState(Bundle outState)
     {
         super.onSaveInstanceState(outState);
         if(_options!=null)
             outState.putAll(_options);
+        // Only the URIs, which the picker's grant already covers. Kept across rotation so that
+        // turning the phone does not silently drop half of the credential.
+        outState.putParcelableArrayList(STATE_KEYFILES, new ArrayList<>(_keyfiles));
     }
 
     public boolean hasPassword()
@@ -276,12 +418,18 @@ public abstract class PasswordDialogBase extends RxDialogFragment
     }
 
     protected static final int REQUEST_OPTIONS = 1;
+    protected static final int REQUEST_KEYFILES = 2;
+    private static final String STATE_KEYFILES = "com.sovworks.eds.android.dialogs.PasswordDialog.KEYFILES";
     protected TextView _labelTextView;
     protected EditSB _passwordEditText,_repeatPasswordEditText,_protectionPasswordEditText;
     protected Openable _location;
     protected Bundle _options;
 
     protected SecureBuffer _passwordResult, _repeatPasswordSB, _protectionPasswordSB;
+    protected Button _keyfilesButton;
+    protected ImageButton _keyfilesClearButton;
+    protected TextView _keyfilesTextView;
+    protected final ArrayList<Uri> _keyfiles = new ArrayList<>();
 
     protected void setWidthHeight()
     {

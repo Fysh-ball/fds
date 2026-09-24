@@ -19,6 +19,12 @@ public interface Openable extends Location
 	 * asked for every time for that reason, and an empty answer means no protection.
 	 */
 	String PARAM_PROTECTION_PASSWORD = "com.sovworks.eds.android.PROTECTION_PASSWORD";
+	/**
+	 * Keyfiles for this open, as an ArrayList of content URIs. Like the protection passphrase,
+	 * never persisted: see ContainerLocation.setKeyfiles. An EMPTY list is meaningful and
+	 * clears keyfiles picked on a previous attempt.
+	 */
+	String PARAM_KEYFILES = "com.sovworks.eds.android.KEYFILES";
 
 	void setPassword(SecureBuffer pass);
 	boolean hasPassword();

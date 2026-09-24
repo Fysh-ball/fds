@@ -1,5 +1,6 @@
 package com.sovworks.eds.android.locations.opener.fragments;
 
+import android.net.Uri;
 import android.os.Bundle;
 
 import com.sovworks.eds.android.dialogs.PasswordDialog;
@@ -12,6 +13,9 @@ import com.sovworks.eds.locations.Location;
 import com.sovworks.eds.locations.LocationsManager;
 import com.sovworks.eds.locations.ContainerLocation;
 import com.sovworks.eds.locations.Openable;
+
+import java.util.ArrayList;
+import java.util.List;
 
 public class LocationOpenerFragmentCommon extends LocationOpenerBaseFragment implements PasswordDialog.PasswordReceiver
 {
@@ -50,6 +54,11 @@ public class LocationOpenerFragmentCommon extends LocationOpenerBaseFragment imp
             if(location instanceof ContainerLocation && param.containsKey(Openable.PARAM_PROTECTION_PASSWORD))
                 ((ContainerLocation) location).setHiddenVolumeProtectionPassword(
                         param.getParcelable(Openable.PARAM_PROTECTION_PASSWORD));
+            if(location instanceof ContainerLocation && param.containsKey(Openable.PARAM_KEYFILES))
+            {
+                List<Uri> kf = param.getParcelableArrayList(Openable.PARAM_KEYFILES);
+                ((ContainerLocation) location).setKeyfiles(kf);
+            }
             if(param.containsKey(Openable.PARAM_KDF_ITERATIONS))
                 location.setNumKDFIterations(param.getInt(Openable.PARAM_KDF_ITERATIONS));
 
@@ -159,6 +168,14 @@ public class LocationOpenerFragmentCommon extends LocationOpenerBaseFragment imp
             if(sb != null)
                 args.putParcelable(Openable.PARAM_PROTECTION_PASSWORD, sb);
         }
+        if(passwordDialogResultBundle.containsKey(Openable.PARAM_KEYFILES))
+        {
+            ArrayList<Uri> kf = passwordDialogResultBundle.getParcelableArrayList(Openable.PARAM_KEYFILES);
+            // Copied even when empty, by the protection passphrase's rule and for its reason:
+            // an empty list is the user removing keyfiles picked on an earlier attempt.
+            if(kf != null)
+                args.putParcelableArrayList(Openable.PARAM_KEYFILES, kf);
+        }
         if(passwordDialogResultBundle.containsKey(Openable.PARAM_KDF_ITERATIONS))
             args.putInt(Openable.PARAM_KDF_ITERATIONS, passwordDialogResultBundle.getInt(Openable.PARAM_KDF_ITERATIONS));
     }
@@ -186,6 +203,9 @@ public class LocationOpenerFragmentCommon extends LocationOpenerBaseFragment imp
         char[] prot = pd.getProtectionPassword();
         if(prot != null)
             res.putParcelable(Openable.PARAM_PROTECTION_PASSWORD, new SecureBuffer(prot));
+        List<Uri> kf = pd.getKeyfiles();
+        if(kf != null)
+            res.putParcelableArrayList(Openable.PARAM_KEYFILES, new ArrayList<>(kf));
         return res;
     }
 }

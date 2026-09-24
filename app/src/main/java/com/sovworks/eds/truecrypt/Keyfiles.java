@@ -18,17 +18,26 @@ import java.util.List;
  * The algorithm is fixed by the on-disk format and is not a design choice here. It is
  * VeraCrypt's Common/Keyfile.c, reproduced exactly:
  *
- *   pool = 64 zero bytes
+ *   n = length <= 64 ? 64 : 128
+ *   pool = n zero bytes
  *   for each keyfile, independently:
  *       crc = 0xffffffff
  *       for each of the first 1048576 bytes b:
  *           crc = table[(crc ^ b) & 0xff] ^ (crc >>> 8)
  *           pool[w++] += crc >>> 24; pool[w++] += crc >>> 16
  *           pool[w++] += crc >>>  8; pool[w++] += crc
- *           if w >= 64 then w = 0
- *   for i in 0..63:
+ *           if w >= n then w = 0
+ *   for i in 0..n-1:
  *       password[i] = i < length ? password[i] + pool[i] : pool[i]
- *   length = max(length, 64)
+ *   length = max(length, n)
+ *
+ * The pool size depends on the PASSPHRASE. VeraCrypt raised the passphrase limit from 64 to
+ * 128 bytes and, to keep every existing container opening, kept the 64 byte pool for any
+ * passphrase that fits the old limit and uses a 128 byte one only above it
+ * (Common/Keyfiles.c: keyPoolSize = Length <= MAX_LEGACY_PASSWORD ? 64 : 128; the Linux
+ * build's Volume/Keyfile.cpp has the same rule). The write position wraps at the pool size,
+ * so the two pools are different functions of the same keyfile, not one a prefix of the
+ * other. TrueCrypt caps passphrases at 64 bytes and so only ever uses the smaller one.
  *
  * Three details are easy to get wrong and each one produces a container that this app and
  * desktop VeraCrypt disagree about, which is the worst possible failure: it looks like a
@@ -48,7 +57,11 @@ import java.util.List;
  */
 public final class Keyfiles
 {
+    /** The pool for any passphrase of up to 64 bytes, which is every TrueCrypt one. */
     public static final int POOL_SIZE = 64;
+
+    /** The pool for a VeraCrypt passphrase longer than 64 bytes. */
+    public static final int LARGE_POOL_SIZE = 128;
 
     /**
      * Only the first mebibyte of each keyfile counts. This is the format's rule, not a
@@ -62,18 +75,26 @@ public final class Keyfiles
     }
 
     /**
+     * The pool size the format uses for a passphrase of this many bytes. See the class comment.
+     */
+    public static int poolSizeFor(int passwordLength)
+    {
+        return passwordLength <= POOL_SIZE ? POOL_SIZE : LARGE_POOL_SIZE;
+    }
+
+    /**
      * @param password the passphrase bytes, which are NOT modified
      * @param keyfiles streams to fold in, read in order and never closed here: the caller
      *                 owns them, because the caller is the only one that knows whether a
      *                 stream is a file it opened or a document it was handed
-     * @return a new array of max(password.length, 64) bytes, or the password unchanged when
-     *         there are no keyfiles at all
+     * @return a new array of max(password.length, pool size) bytes, or the password unchanged
+     *         when there are no keyfiles at all
      */
     public static byte[] apply(byte[] password, List<InputStream> keyfiles) throws IOException
     {
         if(keyfiles == null || keyfiles.isEmpty())
             return password;
-        byte[] pool = new byte[POOL_SIZE];
+        byte[] pool = new byte[poolSizeFor(password == null ? 0 : password.length)];
         try
         {
             for(InputStream is: keyfiles)
@@ -92,45 +113,75 @@ public final class Keyfiles
      * Folds one keyfile into an existing pool. Exposed for the test that checks a two keyfile
      * pool equals the two one keyfile pools added together, which is the property that says
      * the CRC really does restart per file.
+     *
+     * The write position wraps at pool.length, so this serves both pool sizes.
+     *
+     * @return how many bytes of the keyfile were read, at most MAX_READ
      */
-    public static void mixInto(byte[] pool, InputStream is) throws IOException
+    public static long mixInto(byte[] pool, InputStream is) throws IOException
+    {
+        return mixInto(is, pool);
+    }
+
+    /**
+     * Folds one keyfile into every pool given, in a single read of the stream. The CRC is the
+     * same for all of them; only the wraparound differs. This exists so that a keyfile the
+     * user picked is read once, when the passphrase length and therefore the pool size is
+     * not known yet: it is cut per container format, after the keyfiles have been read.
+     */
+    static long mixInto(InputStream is, byte[]... pools) throws IOException
     {
         int crc = 0xffffffff;
-        int w = 0;
+        int[] w = new int[pools.length];
         long total = 0;
         byte[] buf = new byte[8192];
-        while(total < MAX_READ)
+        try
         {
-            int want = (int) Math.min(buf.length, MAX_READ - total);
-            int n = is.read(buf, 0, want);
-            if(n <= 0)
-                break;
-            for(int i = 0; i < n; i++)
+            while(total < MAX_READ)
             {
-                crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
-                pool[w] = (byte) (pool[w] + (crc >>> 24)); w++;
-                pool[w] = (byte) (pool[w] + (crc >>> 16)); w++;
-                pool[w] = (byte) (pool[w] + (crc >>> 8));  w++;
-                pool[w] = (byte) (pool[w] + crc);          w++;
-                if(w >= POOL_SIZE)
-                    w = 0;
+                int want = (int) Math.min(buf.length, MAX_READ - total);
+                int n = is.read(buf, 0, want);
+                if(n <= 0)
+                    break;
+                for(int i = 0; i < n; i++)
+                {
+                    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+                    for(int p = 0; p < pools.length; p++)
+                    {
+                        byte[] pool = pools[p];
+                        int j = w[p];
+                        pool[j] = (byte) (pool[j] + (crc >>> 24)); j++;
+                        pool[j] = (byte) (pool[j] + (crc >>> 16)); j++;
+                        pool[j] = (byte) (pool[j] + (crc >>> 8));  j++;
+                        pool[j] = (byte) (pool[j] + crc);          j++;
+                        w[p] = j >= pool.length ? 0 : j;
+                    }
+                }
+                total += n;
             }
-            total += n;
         }
-        Arrays.fill(buf, (byte) 0);
+        finally
+        {
+            Arrays.fill(buf, (byte) 0);
+        }
+        return total;
     }
 
     /**
      * An empty passphrase with a keyfile is legal and common: the keyfile IS the credential,
-     * and the result is a 64 byte password that is exactly the pool.
+     * and the result is a password that is exactly the pool.
+     *
+     * Mixes the whole of the pool it is given. Choosing the right pool for the passphrase is
+     * the caller's job (poolSizeFor), because this method cannot tell a deliberate choice from
+     * a mistake.
      */
     public static byte[] mixIntoPassword(byte[] password, byte[] pool)
     {
         int len = password == null ? 0 : password.length;
-        byte[] res = new byte[Math.max(len, POOL_SIZE)];
+        byte[] res = new byte[Math.max(len, pool.length)];
         if(len > 0)
             System.arraycopy(password, 0, res, 0, len);
-        for(int i = 0; i < POOL_SIZE; i++)
+        for(int i = 0; i < pool.length; i++)
             res[i] = i < len ? (byte) (res[i] + pool[i]) : pool[i];
         return res;
     }

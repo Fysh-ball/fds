@@ -7,7 +7,10 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import android.content.ClipData;
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.view.ContextThemeWrapper;
 import android.view.LayoutInflater;
@@ -33,6 +36,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.File;
+import java.util.List;
 
 /**
  * The unlock dialog itself: does the protection field appear, for the right containers only,
@@ -79,6 +83,17 @@ public class PasswordDialogProtectionTest
         void injectLocation(Openable location)
         {
             _location = location;
+        }
+
+        /** What the picker hands back, without starting the picker. */
+        void deliverPicked(Uri... uris)
+        {
+            Intent data = new Intent();
+            ClipData clip = ClipData.newRawUri("keyfiles", uris[0]);
+            for(int i = 1; i < uris.length; i++)
+                clip.addItem(new ClipData.Item(uris[i]));
+            data.setClipData(clip);
+            addKeyfiles(data);
         }
     }
 
@@ -256,6 +271,72 @@ public class PasswordDialogProtectionTest
                 "outer-pass-1".toCharArray(), sDialog.getPassword());
         assertArrayEquals("masking again wiped the protection passphrase",
                 "hidden-pass-1".toCharArray(), sDialog.getProtectionPassword());
+    }
+
+    // ---- keyfiles ------------------------------------------------------------------
+
+    /**
+     * Same reasoning as the protection field: offered for VeraCrypt, where the format has
+     * keyfiles, and nowhere else.
+     */
+    @Test
+    public void aVeraCryptContainerOffersKeyfiles()
+    {
+        View v = inflate(sVeraCrypt, false);
+        View row = v.findViewById(R.id.keyfiles_layout);
+        assertNotNull("password_dialog.xml resolved for this density has no keyfiles_layout",
+                row);
+        assertEquals(View.VISIBLE, row.getVisibility());
+        List<Uri> kf = sDialog.getKeyfiles();
+        assertNotNull("a dialog offering keyfiles must answer a list, not null", kf);
+        assertTrue(kf.isEmpty());
+    }
+
+    /**
+     * LUKS keyfiles are a different mechanism that this app does not implement, so the LUKS
+     * format answers false and the picker must not appear. The same file under both
+     * locations, so the format is the only difference.
+     */
+    @Test
+    public void aLuksContainerDoesNotOfferKeyfiles()
+    {
+        View v = inflate(sLuks, false);
+        assertEquals(View.GONE, v.findViewById(R.id.keyfiles_layout).getVisibility());
+        assertNull(sDialog.getKeyfiles());
+    }
+
+    /**
+     * Creating a container with keyfiles is not implemented. A picker on the create dialog
+     * would produce a container that silently ignored the keyfiles the user chose.
+     */
+    @Test
+    public void creatingAContainerDoesNotOfferKeyfiles()
+    {
+        View v = inflate(sVeraCrypt, true);
+        assertEquals(View.GONE, v.findViewById(R.id.keyfiles_layout).getVisibility());
+        assertNull(sDialog.getKeyfiles());
+    }
+
+    /**
+     * What the picker returns is what the dialog hands on, in order, once each; the list is
+     * shown; and the remove button empties it. Picking is additive, like VeraCrypt's own
+     * dialog, so a second trip to the picker adds rather than replaces.
+     */
+    @Test
+    public void pickedKeyfilesComeBackOutAndCanBeRemoved()
+    {
+        View v = inflate(sVeraCrypt, false);
+        Uri a = Uri.parse("content://fdstest/a.key"), b = Uri.parse("content://fdstest/b.key");
+        onUi(() -> sDialog.deliverPicked(a, b));
+        onUi(() -> sDialog.deliverPicked(a));
+        assertEquals("picking the same file again must not count it twice",
+                java.util.Arrays.asList(a, b), sDialog.getKeyfiles());
+        assertEquals(View.VISIBLE, v.findViewById(R.id.keyfiles_list).getVisibility());
+        assertEquals(View.VISIBLE, v.findViewById(R.id.keyfiles_clear).getVisibility());
+
+        onUi(() -> v.findViewById(R.id.keyfiles_clear).performClick());
+        assertTrue("the remove button left keyfiles in place", sDialog.getKeyfiles().isEmpty());
+        assertEquals(View.GONE, v.findViewById(R.id.keyfiles_list).getVisibility());
     }
 
     private static boolean isMasked(View root, int id)

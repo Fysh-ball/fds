@@ -42,10 +42,12 @@ public class FormatInfo implements ContainerFormatInfo
 	@Override
 	public boolean hasKeyfilesSupport()
 	{
-		// Still false, and not because of the paywall: there is no keyfile implementation
-		// anywhere in this tree to switch on. See NOTICE. Returning true here would only make
-		// the app offer a keyfile field that nothing reads.
-		return false;
+		// For OPENING. The unlock dialog offers a keyfile picker when this is true, and
+		// EdsContainerBase mixes the keyfiles into the passphrase for this format (and for
+		// VeraCrypt, which inherits it). Nothing on the container CREATION path reads this:
+		// creating a container with keyfiles is not implemented, and the create dialog does
+		// not offer the picker.
+		return true;
 	}
 
 	@Override

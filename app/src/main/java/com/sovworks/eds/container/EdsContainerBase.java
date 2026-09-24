@@ -20,11 +20,13 @@ import com.sovworks.eds.fs.exfat.ExFat;
 import com.sovworks.eds.fs.fat.FatFS;
 import com.sovworks.eds.fs.std.StdFs;
 import com.sovworks.eds.fs.std.StdFsPath;
+import com.sovworks.eds.truecrypt.KeyfilePool;
 
 import java.io.Closeable;
 import java.io.IOException;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -134,6 +136,27 @@ public abstract class EdsContainerBase implements Closeable
 	public void setHiddenVolumeProtectionPassword(byte[] password)
 	{
 		_hiddenProtectionPassword = password;
+	}
+
+	/**
+	 * Keyfiles for the next open, already folded into pools.
+	 *
+	 * Mixed into the passphrase per format, after that format's length cut, because the pool
+	 * size depends on the cut length (see KeyfilePool). A format with no keyfile support is
+	 * skipped outright while keyfiles are set: the keyfile is part of the credential, so a
+	 * format that would ignore it cannot be the one the user means, and trying it anyway would
+	 * cost a full LUKS KDF on every attempt for nothing.
+	 *
+	 * Not applied to the protection passphrase. VeraCrypt takes separate keyfiles for the
+	 * hidden volume there (--protection-keyfiles), and a hidden volume that has keyfiles of its
+	 * own therefore cannot be protected yet: readHiddenLayout finds nothing and the mount is
+	 * refused, which is the safe failure.
+	 *
+	 * Not copied and not closed here. The caller owns it.
+	 */
+	public void setKeyfiles(KeyfilePool pool)
+	{
+		_keyfilePool = pool;
 	}
 
 	/** True only after open() actually established the protected range. */
@@ -409,6 +432,7 @@ public abstract class EdsContainerBase implements Closeable
 	protected MessageDigest _messageDigest;
 	private boolean _isHiddenVolumeOpened;
 	private byte[] _hiddenProtectionPassword;
+	private KeyfilePool _keyfilePool;
 	private long _protectedStart = -1;
 	private long _protectedEnd = -1;
 
@@ -448,6 +472,8 @@ public abstract class EdsContainerBase implements Closeable
 	{
 		if(isHidden && !cf.hasHiddenContainerSupport())
 			return false;
+		if(_keyfilePool != null && !cf.hasKeyfilesSupport())
+			return false;
 		Logger.debug(String.format("Trying %s container format%s", cf.getFormatName(), isHidden ? " (hidden)" : ""));
 		_isHiddenVolumeOpened = isHidden;
 		if(_progressReporter!=null)
@@ -470,7 +496,7 @@ public abstract class EdsContainerBase implements Closeable
 		boolean adopted = false;
 		try
 		{
-			vl.setPassword(cutPassword(password, cf.getMaxPasswordLength()));
+			vl.setPassword(formatPassword(cf, password));
 			if(cf.hasCustomKDFIterationsSupport() && _numKDFIterations > 0)
 				vl.setNumKDFIterations(_numKDFIterations);
 			if(vl.readHeader(containerFile))
@@ -501,6 +527,30 @@ public abstract class EdsContainerBase implements Closeable
 		}
 	}
 	
+	/**
+	 * The passphrase as this format will see it: cut to the format's limit, then with the
+	 * keyfiles mixed in. That order is the format's own. VeraCrypt applies keyfiles to the
+	 * passphrase it accepted, never to bytes past its limit, and the pool size it picks is a
+	 * function of that accepted length.
+	 *
+	 * Returns an array the layout takes ownership of and zeroes on close.
+	 */
+	private byte[] formatPassword(ContainerFormatInfo cf, byte[] password)
+	{
+		byte[] cut = cutPassword(password, cf.getMaxPasswordLength());
+		if(_keyfilePool == null)
+			return cut;
+		try
+		{
+			return _keyfilePool.applyTo(cut);
+		}
+		finally
+		{
+			if(cut != null)
+				Arrays.fill(cut, (byte) 0);
+		}
+	}
+
 	protected Iterable<VolumeLayout> getLayouts(boolean isHidden)
 	{
 		List<VolumeLayout> vll = new ArrayList<>();

@@ -55,8 +55,9 @@ inherits. The whole tree contains three references to the feature and none of th
 implementation: the interface declaration in container/ContainerFormatInfo.java, the lite
 override, and luks/FormatInfoBase.java. There is no keyfile pool, no CRC32 mixer, no UI.
 hasKeyfilesSupport() -> false is an honest answer here. FDS has to write the feature.
-(Since then FDS has written the keyfile pool, truecrypt/Keyfiles.java, and tested it
-against desktop VeraCrypt. hasKeyfilesSupport() stays false until a UI can supply keyfiles.)
+(Since then FDS has written the keyfile pool, truecrypt/Keyfiles.java, tested it against
+desktop VeraCrypt, and added a keyfile picker to the unlock dialog. hasKeyfilesSupport() is
+now true for TrueCrypt and VeraCrypt, for opening only.)
 
 MAXIMUM PASSPHRASE LENGTH was a plain constant, getMaxPasswordLength() -> 64, inherited by
 veracrypt/FormatInfo without an override. TrueCrypt's format limit really is 64 bytes, so

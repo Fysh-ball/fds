@@ -355,11 +355,51 @@ Creating hidden volumes is still not implemented: use desktop VeraCrypt for that
 
 ### Keyfiles
 
-Half done. Upstream had no implementation at all (see NOTICE), so the VeraCrypt
-keyfile pool was written from scratch in `truecrypt/Keyfiles.java` and is tested
-against real desktop VeraCrypt containers; see Keyfiles under Testing. There is
-no keyfile picker yet, so `FormatInfo.hasKeyfilesSupport()` still returns false
-and a keyfile container cannot be opened from the UI.
+TrueCrypt and VeraCrypt containers can be opened with keyfiles. Upstream had no
+implementation at all (see NOTICE), so the pool was written from scratch in
+`truecrypt/Keyfiles.java`; see Keyfiles under Testing for how it is checked.
+
+The unlock dialog has an "Add keyfiles" button, shown only when opening a
+container whose format has keyfiles (not LUKS, and not while creating one). It
+uses the system file picker, so a keyfile can live anywhere a document provider
+reaches and no storage permission is involved. Picking is additive and a file
+picked twice counts once.
+
+The picked files are content URIs, held on the location for one open and
+forgotten on close or on a refused open. They are never saved with the
+location: which file is a container's keyfile is half of its credential.
+
+Keyfiles are mixed per container format inside `EdsContainerBase`, after the
+format has cut the passphrase to its own limit, because the pool size depends on
+that length (see below). While keyfiles are set, formats without keyfile support
+are skipped, so a LUKS KDF is not paid on every attempt for nothing. A keyfile
+that cannot be read, or that is empty, fails the open with a message naming the
+file instead of falling through to "wrong password".
+
+Not done:
+
+- Creating a container with keyfiles. The create dialog does not offer them.
+- Keyfiles for the hidden volume when protecting it (VeraCrypt's
+  `--protection-keyfiles`). A hidden volume that has its own keyfiles cannot be
+  protected yet, and asking for protection refuses the mount, which is the safe
+  failure.
+- A location with a saved password skips the unlock dialog, so it cannot be
+  given keyfiles. This is the same gap as the protection passphrase above.
+- LUKS keyfiles, which are a different mechanism.
+
+**A 64-byte ceiling hides the large pool.** VeraCrypt uses a 128-byte pool for a
+passphrase longer than 64 bytes. `Keyfiles` now does the same (it used 64
+regardless before, which was wrong for those passphrases). But
+`ContainerBasedLocation.getSelectedPassword()` still cuts every passphrase to 64
+bytes before the container sees it, VeraCrypt ones included, despite
+`veracrypt/FormatInfo.getMaxPasswordLength()` answering 128. So through the app
+the large pool is currently unreachable, and a VeraCrypt passphrase over 64
+bytes does not open with or without keyfiles. Creation does not go through that
+cut (`ContainerFormatterBase` cuts per format, to 128 for VeraCrypt), so a
+VeraCrypt or LUKS container this app creates with a passphrase over 64 bytes
+cannot be reopened by it. Not fixed here; `EdsContainerBase` already cuts per
+format on open, so the location's cut looks removable, but that is its own
+change with its own test.
 
 ### Branding and the About dialog
 
@@ -485,7 +525,9 @@ wipe instead of unlinking.
   four levels: the container, the location, the unlock dialog, and end to end
   with a destructive control test proving the unprotected write really does
   destroy the hidden volume. Keyfile derivation is written and matches VeraCrypt.
-  Outstanding: hidden volume creation, the keyfile picker UI
+  Keyfiles open TrueCrypt and VeraCrypt containers from the unlock dialog.
+  Outstanding: hidden volume creation, creating containers with keyfiles,
+  protection keyfiles for the hidden volume
 - **M4 hardening** - `allowBackup=false`, `FLAG_SECURE` on by default, both
   automatic locks, the key-zeroing pass and the wipe fix are done. The zeroing
   pass covered the three paths that leaked key material on the failure branch:
@@ -522,10 +564,10 @@ the crypto can only be exercised on a real ABI.
 | `HiddenVolumeProtectionTest` | every write that touches the protected extent is refused and every write that misses it goes through, both write paths, the refusal latches, a truncation below the hidden volume is refused, an empty protected range is rejected, and reads are never refused | an in-memory IO the test reads back byte for byte |
 | `OuterVolumeProtectionTest` | a write aimed at the hidden volume is refused and the hidden volume still opens with its original contents; the SAME write with no protection destroys it; a wrong protection passphrase refuses the mount | desktop VeraCrypt 1.26, and the unprotected control |
 | `ContainerLocationProtectionTest` | the second passphrase survives the trip from the location to the container and switches protection on; an identical open without it has protection off; an empty field means no protection rather than a failed mount; a wrong one refuses the mount as the message the UI shows; close() drops the passphrase | the container's own protected-range state, and the unprotected control |
-| `PasswordDialogProtectionTest` | the unlock dialog offers the protection field for a VeraCrypt container and not for LUKS or while creating one; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases and destroys neither | the LUKS location as the format control, and known-bad builds of both reveal arms |
-| `LocationOpenerBundleTest` | the two Bundle hops between the dialog and the location: what the dialog holds reaches the result bundle and is copied onto the open request, a dialog that never offered the field puts nothing there, and the deliberate asymmetry holds (an empty protection passphrase overwrites a stale one, an empty password does not overwrite a saved one) | the bundle contents themselves, and a known-bad that gives the protection branch the password branch's rule |
+| `PasswordDialogProtectionTest` | the unlock dialog offers the protection field and the keyfile picker for a VeraCrypt container and not for LUKS or while creating one; picked keyfiles come back out once each and the remove button empties them; the layout this device resolves actually carries it; what is typed comes back out; a blank field reads as empty and a never-offered one as absent; the reveal button unmasks both passphrases and destroys neither | the LUKS location as the format control, and known-bad builds of both reveal arms |
+| `LocationOpenerBundleTest` | the two Bundle hops between the dialog and the location, for the protection passphrase and for keyfiles: what the dialog holds reaches the result bundle and is copied onto the open request, a dialog that never offered the field puts nothing there, and the deliberate asymmetry holds (an empty protection passphrase or keyfile list overwrites a stale one, an empty password does not overwrite a saved one) | the bundle contents themselves, and a known-bad that gives the protection branch the password branch's rule |
 | `SettingsKeyLockTest` | a protected setting round-trips; dropping the cached settings key costs nothing but a re-derivation and hands back a different buffer; a saved container password still opens after the lock; clearing the master password erases it rather than dropping the reference; and the WRONG lock, erasing the key buffer without dropping the cache, breaks every protected read AND throws out of the saved-password path | the protected preference itself, and the broken state as an executable known-bad |
-| `KeyfileTest` | the VeraCrypt keyfile pool, byte for byte against an independent implementation, for one keyfile and for two; keyfile order does not matter; bytes past 1 MiB are ignored and bytes inside the window are not; the pool mixes into an empty, a short and a long passphrase correctly; and three real keyfile containers open with their keyfiles, refuse the wrong keyfile, and refuse the passphrase alone | an independent Python implementation of `Common/Keyfile.c`, and three desktop VeraCrypt containers |
+| `KeyfileTest` | the VeraCrypt keyfile pool, byte for byte against an independent implementation, for one keyfile and for two; keyfile order does not matter; bytes past 1 MiB are ignored and bytes inside the window are not; the pool mixes into an empty, a short and a long passphrase correctly; a passphrase over 64 bytes switches to the 128-byte pool, on both sides of the boundary; the pool the open path uses agrees with `Keyfiles.apply` at every length; an empty keyfile is refused; three real keyfile containers open with their keyfiles, both pre-mixed and through `EdsContainer.setKeyfiles`, refuse the wrong keyfile, and refuse the passphrase alone; a keyfile container opens through the location from URIs, which forgets them on close; an empty keyfile fails the open by name and the refused open forgets the keyfiles | an independent Python implementation of `Common/Keyfile.c`, a second one of `Volume/Keyfile.cpp` for the 128-byte pool, and three desktop VeraCrypt containers |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific
@@ -642,10 +684,19 @@ matrix. `theWrongKeyfileDoesNotOpenIt` is one container at about seven minutes
 and stays in the default run, which is enough to catch a keyfile pool that is
 being ignored.
 
-`FormatInfo.hasKeyfilesSupport()` still returns false, deliberately. The
-algorithm is landed and tested; nothing in the UI reads a keyfile yet, and the
-comment there already says a format should not advertise a field nothing
-consumes. It flips when the picker exists.
+**The pool size is not always 64.** VeraCrypt raised the passphrase limit to
+128 bytes and, to keep old containers opening, kept the 64-byte pool for any
+passphrase up to 64 bytes and uses a 128-byte pool above that
+(`Common/Keyfiles.c`: `keyPoolSize = Length <= MAX_LEGACY_PASSWORD ? 64 : 128`,
+and `Volume/Keyfile.cpp` on Linux). The write position wraps at the pool size,
+so the large pool is not the small one padded out. `Keyfiles.java` used 64
+every time until this was checked against the VeraCrypt source. Twelve vectors
+(passphrases of 0, 3, 64, 65, 100 and 128 bytes, with one keyfile and with
+two) were generated by a Python port of `Keyfile.cpp` written from the source.
+Every one matches the new code, and the old code gets all six over 64 bytes
+wrong and all six at 64 or below right. Four of the vectors are pinned in
+`KeyfileTest`. No desktop VeraCrypt container with a long passphrase and a
+keyfile has been built yet, so this rests on the source and not on the binary.
 
 `UnsupportedMatrixTest` is `@LargeTest` and the runner excludes it unless you
 name it, because every fixture in it pays the whole hash sweep twice. The
