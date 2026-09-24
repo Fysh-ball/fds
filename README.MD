@@ -387,19 +387,19 @@ Not done:
   given keyfiles. This is the same gap as the protection passphrase above.
 - LUKS keyfiles, which are a different mechanism.
 
-**A 64-byte ceiling hides the large pool.** VeraCrypt uses a 128-byte pool for a
-passphrase longer than 64 bytes. `Keyfiles` now does the same (it used 64
-regardless before, which was wrong for those passphrases). But
-`ContainerBasedLocation.getSelectedPassword()` still cuts every passphrase to 64
-bytes before the container sees it, VeraCrypt ones included, despite
-`veracrypt/FormatInfo.getMaxPasswordLength()` answering 128. So through the app
-the large pool is currently unreachable, and a VeraCrypt passphrase over 64
-bytes does not open with or without keyfiles. Creation does not go through that
-cut (`ContainerFormatterBase` cuts per format, to 128 for VeraCrypt), so a
-VeraCrypt or LUKS container this app creates with a passphrase over 64 bytes
-cannot be reopened by it. Not fixed here; `EdsContainerBase` already cuts per
-format on open, so the location's cut looks removable, but that is its own
-change with its own test.
+**Passphrases over 64 bytes.** VeraCrypt uses a 128-byte pool for a passphrase
+longer than 64 bytes, and `Keyfiles` now does the same (it used 64 regardless
+before, which was wrong for those passphrases). Until the same change set,
+`ContainerBasedLocation.getSelectedPassword()` also cut every passphrase to 64
+bytes, TrueCrypt's limit, before any container saw it, whatever the format. So a
+VeraCrypt passphrase over 64 bytes never opened through the app, with or
+without keyfiles. Creation never went through that cut (`ContainerFormatterBase`
+cuts per format), so a VeraCrypt or LUKS container the app created with a long
+passphrase could not be reopened by it. The location's cut is gone, and the
+per-format cut in `EdsContainerBase` is the only one. Changing a container's
+password now cuts per format too; it used to write the new passphrase uncut, so
+a TrueCrypt passphrase over 64 bytes produced a header the open path could not
+match.
 
 ### Branding and the About dialog
 
@@ -568,6 +568,7 @@ the crypto can only be exercised on a real ABI.
 | `LocationOpenerBundleTest` | the two Bundle hops between the dialog and the location, for the protection passphrase and for keyfiles: what the dialog holds reaches the result bundle and is copied onto the open request, a dialog that never offered the field puts nothing there, and the deliberate asymmetry holds (an empty protection passphrase or keyfile list overwrites a stale one, an empty password does not overwrite a saved one) | the bundle contents themselves, and a known-bad that gives the protection branch the password branch's rule |
 | `SettingsKeyLockTest` | a protected setting round-trips; dropping the cached settings key costs nothing but a re-derivation and hands back a different buffer; a saved container password still opens after the lock; clearing the master password erases it rather than dropping the reference; and the WRONG lock, erasing the key buffer without dropping the cache, breaks every protected read AND throws out of the saved-password path | the protected preference itself, and the broken state as an executable known-bad |
 | `KeyfileTest` | the VeraCrypt keyfile pool, byte for byte against an independent implementation, for one keyfile and for two; keyfile order does not matter; bytes past 1 MiB are ignored and bytes inside the window are not; the pool mixes into an empty, a short and a long passphrase correctly; a passphrase over 64 bytes switches to the 128-byte pool, on both sides of the boundary; the pool the open path uses agrees with `Keyfiles.apply` at every length; an empty keyfile is refused; three real keyfile containers open with their keyfiles, both pre-mixed and through `EdsContainer.setKeyfiles`, refuse the wrong keyfile, and refuse the passphrase alone; a keyfile container opens through the location from URIs, which forgets them on close; an empty keyfile fails the open by name and the refused open forgets the keyfiles | an independent Python implementation of `Common/Keyfile.c`, a second one of `Volume/Keyfile.cpp` for the 128-byte pool, and three desktop VeraCrypt containers |
+| `PassphraseLengthTest` | a 100-byte passphrase reaches the container whole from a VeraCrypt location, a 64-byte one unchanged; TrueCrypt and VeraCrypt still cut to 64 and 128 | a container that records what it is handed, and the old 64-byte cut as the known-bad |
 | `OpenHintTest` | a hash hint replaces the search with one derivation; a successful open reports the format, cipher and hash it used; those survive the settings round-trip; a hidden open is distinguishable from an outer one | desktop VeraCrypt 1.26, and the container's own progress reporter |
 
 Every arm of `HardeningTest` has been run against a build with that specific

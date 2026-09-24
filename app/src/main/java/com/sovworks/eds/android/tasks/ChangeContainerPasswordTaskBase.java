@@ -3,6 +3,9 @@ package com.sovworks.eds.android.tasks;
 import android.os.Bundle;
 
 import com.sovworks.eds.android.helpers.Util;
+import com.sovworks.eds.container.ContainerFormatInfo;
+import com.sovworks.eds.container.EdsContainer;
+import com.sovworks.eds.container.EdsContainerBase;
 import com.sovworks.eds.container.VolumeLayout;
 import com.sovworks.eds.crypto.SecureBuffer;
 import com.sovworks.eds.exceptions.ApplicationException;
@@ -38,11 +41,27 @@ public abstract class ChangeContainerPasswordTaskBase extends ChangeEDSLocationP
 
 	protected void setContainerPassword(ContainerLocation container) throws IOException
     {
-        VolumeLayout vl = container.getEdsContainer().getVolumeLayout();
+        EdsContainer cnt = container.getEdsContainer();
+        VolumeLayout vl = cnt.getVolumeLayout();
         Bundle args  = getArguments();
         SecureBuffer sb = Util.getPassword(args, LocationsManager.getLocationsManager(_context));
-        vl.setPassword(sb.getDataArray());
+        byte[] pass = sb.getDataArray();
         sb.close();
+        // Cut to the format's limit, as creation and every open already do. Written uncut, a
+        // new TrueCrypt passphrase over 64 bytes (or a VeraCrypt one over 128) produced a
+        // header keyed with bytes the open path never supplies, and the container stopped
+        // opening the moment the change was saved.
+        ContainerFormatInfo cfi = cnt.getContainerFormat();
+        try
+        {
+            // cutPassword always returns a copy (or null for null), and a limit of 0 means none.
+            vl.setPassword(EdsContainerBase.cutPassword(pass,
+                    cfi == null ? 0 : cfi.getMaxPasswordLength()));
+        }
+        finally
+        {
+            SecureBuffer.eraseData(pass);
+        }
         if(args.containsKey(Openable.PARAM_KDF_ITERATIONS))
             vl.setNumKDFIterations(args.getInt(Openable.PARAM_KDF_ITERATIONS));
     }

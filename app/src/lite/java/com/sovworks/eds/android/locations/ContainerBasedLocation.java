@@ -642,7 +642,13 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 		public List<Uri> keyfiles;
 	}
 
-	public static final int MAX_PASSWORD_LENGTH = 64;
+	// There used to be a MAX_PASSWORD_LENGTH of 64 here and a getSelectedPassword() override
+	// that cut every passphrase to it before the container saw it. It was TrueCrypt's limit
+	// applied to every format: VeraCrypt allows 128 bytes and LUKS far more, and creation
+	// (ContainerFormatterBase) cuts per format, so a VeraCrypt or LUKS container this app
+	// created with a passphrase over 64 bytes could not be reopened by it. The per-format cut
+	// in EdsContainerBase.tryLayout is the only one now, which is also where keyfiles are
+	// mixed in, after it.
 
 	@Override
 	protected SharedData getSharedData()
@@ -673,20 +679,6 @@ public class ContainerBasedLocation extends EDSLocationBase implements Container
 	{
 		String name = getExternalSettings().getContainerFormatName();
 		return ExternalSettings.isEmpty(name) ? null : EdsContainer.findFormatByName(name);
-	}
-
-	@Override
-	protected byte[] getSelectedPassword()
-	{
-		byte[] pass = super.getSelectedPassword();
-		if(pass!=null && pass.length>MAX_PASSWORD_LENGTH)
-		{
-			byte[] tmp = pass;
-			pass = new byte[MAX_PASSWORD_LENGTH];
-			System.arraycopy(tmp, 0, pass, 0, MAX_PASSWORD_LENGTH);
-			SecureBuffer.eraseData(tmp);
-		}
-		return pass;
 	}
 
     @Override
